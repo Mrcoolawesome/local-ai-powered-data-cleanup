@@ -1,0 +1,36 @@
+# Security & Sandboxing
+
+This is the foundational risk in the whole system: an LLM is generating and triggering execution of code and shell commands, unattended, on a machine that holds customer data and live third-party platform credentials (see the HCP scraper `.env`/`session.json` files in `/example-scrapers`, which their own READMEs flag as holding live customer credentials). Treat this as load-bearing architecture, not a hardening pass added later.
+
+## Threat model (what we're actually defending against)
+
+- A generated Pandas script with a bug that deletes/corrupts data instead of cleaning it.
+- A scraped file, or an unusual README, containing content that manipulates the agent into running something it shouldn't (prompt injection via untrusted document content — the agent reads READMEs and file content it didn't author).
+- A generated script or triggered command that reaches out to the network in a way that wasn't intended (data exfiltration, or hitting the wrong external endpoint).
+- A scraper credential (`.env`, `session.json`) leaking into a log, an LLM prompt, or a committed file.
+- Runaway execution (infinite loop, resource exhaustion) taking down the AI server.
+
+## Design: Docker container per execution
+
+Every LLM-directed execution — a generated cleaning script, a chat-triggered DataFrame edit, a scraper-triggered command — runs in its own short-lived Docker container. No execution happens directly in the FastAPI process or its host user.
+
+**Per-container constraints:**
+- **No network access by default.** Cleaning-script containers never need network — they operate on a file already on disk. Scraper containers are the one legitimate exception (they need to reach the target platform) and get network access scoped as narrowly as practical for that run, not a blanket-open container.
+- **Minimal, explicit filesystem mounts.** A cleaning-script container gets read access to the one input file and write access to one output path — not the whole storage root. A scraper container gets its own scraper directory (script, README, saved session/`.env`) mounted, and nothing else.
+- **Resource limits.** CPU/memory caps and a hard execution timeout (config value in `Settings`) on every container, so a runaway script or hung scraper process can't take down the host.
+- **Non-root container user**, ephemeral (removed after execution, not reused).
+- **No secrets in the LLM's own context.** The model never sees `.env` contents or session tokens — it only sees the *plan* (which command to run); the actual credential file is mounted directly into the sandbox container by the orchestrator, bypassing the model entirely.
+
+## Credential handling
+
+- Scraper `.env`/session files stay on disk in their scraper's own directory, never copied into the app's database or logs.
+- `.gitignore` (already in place at repo root) excludes `*.env` and `session.json` — this is non-negotiable given these files hold live customer platform credentials per the scrapers' own documentation.
+- `AuditLog`/`ScraperRun` records store the *command executed* and *outcome*, never environment variable values or file contents from `.env`.
+
+## Prompt-injection awareness
+
+Any content the agent reads that it didn't author — a README, a scraped file's contents — is untrusted input, not instructions. The scraper-planning system prompt ([05-llm-prompting.md](./05-llm-prompting.md)) treats the README strictly as data to extract a plan *from*, and that plan is still subject to the same sandboxing above — a README can't grant itself broader container permissions than the orchestrator's own fixed policy allows, regardless of what it says.
+
+## What this buys us vs. what it doesn't
+
+Containerization limits *blast radius* — a bad script corrupts a mounted file or wastes container resources, not the host filesystem or the database. It does not replace: reviewing generated scripts before they're trusted for a new `TargetSchema`/rule combination the system hasn't run before, monitoring `ScraperRun`/`CleaningRun` logs, or the human-in-the-loop audit step itself. Sandboxing is the containment layer; the audit chat is the correctness layer.
