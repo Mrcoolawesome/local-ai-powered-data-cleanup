@@ -29,5 +29,10 @@ __pycache__/
 /storage/
 /uploads/
 
+# Zoom spike — proprietary SDK download (never redistribute) + regenerable screenshots
+spikes/zoom-presentation-bot/zoom-sdk/
+spikes/zoom-presentation-bot/output/
+spikes/zoom-presentation-bot/zoom-sdk-integration/build/
+
 .DS_Store
 *.log

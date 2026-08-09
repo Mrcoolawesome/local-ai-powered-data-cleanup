@@ -1,0 +1,39 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Zoom Spike Test Page</title>
+<style>
+  /* Large, high-contrast, and constantly updating so a human watching the
+     Zoom share can immediately tell whether the feed is live or frozen. */
+  html, body {
+    margin: 0; padding: 0; width: 100vw; height: 100vh;
+    background: #10151f; color: #f4f6fb;
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+  }
+  h1 { font-size: 4vw; margin: 0 0 1rem; color: #7dd3fc; }
+  #clock { font-size: 8vw; font-variant-numeric: tabular-nums; }
+  #tick { font-size: 3vw; margin-top: 1rem; color: #9ca3af; }
+  #tick.flash { color: #22c55e; }
+</style>
+</head>
+<body>
+  <h1>local-ai-powered-data-cleanup &mdash; Zoom Share Spike</h1>
+  <div id="clock">--:--:--</div>
+  <div id="tick">tick 0</div>
+  <script>
+    // Redraw every second so a stalled/frozen native share is obvious to a
+    // human watching the meeting, not just to whoever is at the keyboard.
+    let ticks = 0;
+    const clockEl = document.getElementById('clock');
+    const tickEl = document.getElementById('tick');
+    setInterval(() => {
+      clockEl.textContent = new Date().toLocaleTimeString();
+      ticks += 1;
+      tickEl.textContent = 'tick ' + ticks;
+      tickEl.classList.toggle('flash');
+    }, 1000);
+  </script>
+</body>
+</html>
