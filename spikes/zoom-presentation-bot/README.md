@@ -18,56 +18,37 @@ What it does: boots `Xvfb :99`, serves `test-page/index.html` (a page with a liv
 
 This proves the presentation-route half of the design ([docs/01-architecture.md](../../docs/01-architecture.md)'s "live presentation" data flow) — headlessly rendering and continuously updating a web view — works on this hardware/software combination.
 
-## Stage 2 — Zoom Linux Meeting SDK join + `startShareView` — NOT YET RUNNABLE
+## Stage 2 — Zoom Linux Meeting SDK join + `StartAppShare`
 
-**Status: skeleton only. This is the part that actually answers "can we do this."**
+**Status: compiles, links, and runs against the real SDK. `InitSDK` → `CreateAuthService` → JWT-signed `SDKAuth()` all verified working end-to-end against Zoom's actual auth servers (see "What's been proven" below). Only real credentials + a real test meeting are needed to get past auth and prove the actual join+share.**
 
-I can't complete or run this stage myself: the Zoom Meeting SDK for Linux is a proprietary download gated behind an authenticated Zoom Marketplace developer account, and there's no public API to fetch it. This has to happen on your end.
+The Zoom Meeting SDK for Linux (`zoom-meeting-sdk-linux_x86_64-7.1.5.4432`) is now in `zoom-sdk/` (gitignored — proprietary, ~330MB extracted). Everything in this section was written against its **real headers**, not guessed — see the comment block at the top of `zoom-sdk-integration/join_and_share.cpp` for exactly which header confirmed which API shape.
 
-### What you need to obtain
+### What's been proven, concretely
 
-1. **A Zoom Marketplace "General App" with Meeting SDK enabled.** Sign in at [marketplace.zoom.us](https://marketplace.zoom.us) → Develop → Build App → General App → enable the "Meeting SDK" feature. This gives you an **SDK Key** and **SDK Secret**.
-2. **The Linux Meeting SDK package itself**, downloaded from the same developer portal (Meeting SDK → Download → Linux). It ships as a `.tar.gz` containing `.so` libraries and C++ headers — there is no official Python/Node binding, so the join/share code has to be C++ (or wrapped via a thin C++ shim called from Python, if we want the rest of the bot service in Python to match the FastAPI stack).
-3. A **test Zoom meeting** to join against (a personal meeting ID you control, so joining/leaving repeatedly doesn't bother anyone).
+- `join_and_share.cpp` **compiles and links** against the real SDK headers/libs (`cmake --build build` succeeds).
+- **Two real, non-obvious build issues were hit and fixed** — worth knowing if this build ever needs redoing on different hardware:
+  1. `libmeetingsdk.so`'s embedded `DT_SONAME` is `libmeetingsdk.so.1`, but the file Zoom ships is named `libmeetingsdk.so` (no version suffix) — the dynamic loader looks for the SONAME, not the filename. Fix: a symlink `libmeetingsdk.so.1 → libmeetingsdk.so` inside `zoom-sdk/` (not committed — recreate it if you re-extract the SDK: `ln -sf libmeetingsdk.so zoom-sdk/libmeetingsdk.so.1`).
+  2. Linking our own `QCoreApplication` against the **system** Qt6 (6.10.2 here) while also loading `libmeetingsdk.so`'s **bundled** Qt6 caused `undefined symbol ... version Qt_6_PRIVATE_API` at runtime — two different Qt6 builds both claiming to provide `libQt6Core.so.6` in the same process, first-loaded-wins, and the bundled Qt6Gui/Qml/Quick/DBus libraries then can't find the private-ABI symbols they expect from *their own* Qt6Core build. Fixed by linking the SDK's own bundled `qt_libs/Qt/lib/libQt6Core.so.6` instead of system Qt6 (see `CMakeLists.txt` — we still use system Qt6 *headers* to compile against, since `QCoreApplication`'s public API is stable across Qt6 minor versions; only the *linked runtime lib* had to match the SDK's bundle).
+- **Ran it.** With placeholder (non-real) credentials: `InitSDK` succeeded, `CreateAuthService` succeeded, the hand-rolled JWT builder (HMAC-SHA256 per `auth_service_interface.h`'s documented `{appKey, iat, exp, tokenExp}` payload) produced a request Zoom's real auth backend accepted and evaluated, and the async callback correctly reported `AUTHRET_JWTTOKENWRONG` — the *correct* rejection for a bad key, not a crash, timeout, or malformed-request error. That confirms the entire pipeline up to the auth boundary: SDK init, event-loop wiring, JWT construction, and live network round-trip to Zoom, all work on this hardware.
 
-### What to do once you have those
+### What's still needed — from you, not me
 
-1. Drop the extracted SDK into `zoom-sdk/` in this folder (gitignored — see below).
-2. Fill in `zoom-sdk-integration/join_and_share.cpp` (skeleton below) with real `InitSDK` → `Auth` (JWT signed with your SDK key/secret) → `Join` → get the meeting's sharing controller → `startShareView` against the Xvfb display's window handle.
-3. Build against the SDK's `CMakeLists.txt` pattern from Zoom's own Linux sample app (included in the SDK download — reuse its build setup rather than reinventing it).
-4. Run stage 1's Xvfb+Chromium container, get its X11 socket exposed to the SDK build (same `DISPLAY`), run the join/share binary, and have a human sit in the test meeting to confirm the shared view is visible and live (same "does the clock keep advancing" check as stage 1).
+1. **Real SDK Key + SDK Secret.** On your app's Zoom Marketplace dashboard, find "App Credentials" under the **Meeting SDK** feature (not the OAuth Client ID/Secret — those are a different feature and won't work here). Put them in `zoom-sdk-integration/.env` (copy `.env.example`, gitignored, never paste real values into chat).
+2. **A test meeting number + password** you control.
+3. **The actual window handle to share** — start stage 1's Xvfb (`./start-xvfb-chromium.sh`, or the container), then run `DISPLAY=:99 xdotool search --name Chromium` (or whatever the window title is) to get a real window ID, and format it per `.env.example`'s `ZOOM_SHARE_X_WINDOW_HANDLE`.
 
-### `zoom-sdk-integration/join_and_share.cpp` (skeleton, will not compile without the real SDK)
+### Running it once you have those
 
-```cpp
-// SKELETON — requires the real Zoom Linux Meeting SDK headers/libs, which are
-// not present in this repo. Fill in against Zoom's own sample app patterns
-// once the SDK tarball (see README "What you need to obtain") is available.
-//
-// #include "zoom_sdk.h"
-// #include "meeting_service_interface.h"
-// #include "meeting_share_interface.h"
-//
-// int main() {
-//     // 1. InitSDK — one-time SDK initialization.
-//     // 2. Auth — JWT signed with SDK key/secret from your Marketplace app.
-//     // 3. Join — meeting number + password from the target meeting link.
-//     // 4. Once IN_MEETING: get IMeetingShareController from the meeting
-//     //    service, and call StartShareView (or the equivalent share-view
-//     //    call in the SDK version you download — method names have
-//     //    changed across SDK versions, verify against your copy's headers)
-//     //    passing the Xvfb display's window handle (from stage 1's :99
-///    //    display — use `xdotool search` or XQueryTree to get the actual
-//     //    window ID of the Chromium window, not the whole display).
-//     // 5. Watch for share-start/share-stop callbacks to confirm success
-//     //    rather than assuming the call succeeded.
-// }
+```bash
+cd zoom-sdk-integration
+cmake -S . -B build && cmake --build build
+set -a; source .env; set +a   # loads ZOOM_SDK_KEY etc. into the environment
+./build/zoom_join_and_share
 ```
 
-### Success criteria for this stage
-
-A human sitting in the test meeting sees the same live-updating test page from stage 1, shared continuously for several minutes, without the bot disconnecting or the share silently dropping. If that fails or proves unreliable, fall back per [docs/07-zoom-bot.md](../../docs/07-zoom-bot.md)'s fallback section (virtual webcam device, or the Zoom Browser SDK instead of native).
+Have a human sit in the test meeting. Success criteria: they see the shared view live and updating, continuously, for several minutes, without the bot disconnecting or the share silently dropping. If that fails or proves unreliable, fall back per [docs/07-zoom-bot.md](../../docs/07-zoom-bot.md)'s fallback section (virtual webcam device, or the Zoom Browser SDK instead of native).
 
 ## Gitignored in this folder
 
-`zoom-sdk/` (the proprietary SDK download itself — must never be committed, both for size and Zoom's own distribution terms) and `output/` (spike screenshots — regenerable, not meaningful to keep in history).
+`zoom-sdk/` (the proprietary SDK download — must never be committed, both for size and Zoom's own distribution terms), `zoom-sdk-integration/build/` and `.env` (build output and real credentials), and `output/` (spike screenshots — regenerable, not meaningful to keep in history).
