@@ -34,5 +34,12 @@ spikes/zoom-presentation-bot/zoom-sdk/
 spikes/zoom-presentation-bot/output/
 spikes/zoom-presentation-bot/zoom-sdk-integration/build/
 
+# Ollama prompting spike — regenerable outputs of an actual model run
+spikes/ollama-prompting/raw_response.txt
+spikes/ollama-prompting/generated_clean.py
+spikes/ollama-prompting/combined_script.py
+spikes/ollama-prompting/system_prompt.txt
+spikes/ollama-prompting/fixtures/
+
 .DS_Store
 *.log

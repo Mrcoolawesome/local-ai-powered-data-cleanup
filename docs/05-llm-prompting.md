@@ -73,3 +73,10 @@ Includes: schema-level context (as above), the `CleaningRule`s, a short window o
 ## Verification, not blind trust
 
 The model's self-reported `report` dict (unmapped fields, rows it flagged) is a *claim*, not ground truth — always cross-check it against what the sandbox execution actually observed (actual null counts post-clean, actual row count delta) before it goes into an `AuditReport`. A quantized 4B-class model will occasionally under- or over-report what it did; the audit report the user reads should reflect measured reality, with the model's own commentary presented as commentary.
+
+## Phase 0 spike status — RESULT: prompt design produces correct cleaning logic; harness needs one defensive accommodation
+
+Spike lives in [`/spikes/ollama-prompting`](../spikes/ollama-prompting/README.md), run for real against `gemma4-e4b-262k:latest` and through the Docker sandbox spike.
+
+- **Correctness: 6/6 rows verified correct by hand** against three cleaning rules (phone preference/normalization, name combination, address joining) on a synthetic dirty dataset, including the one genuinely hard case (a row with no phone data in either source column) — the model correctly left the required field null rather than fabricating a value.
+- **Contract compliance gap, with a known fix:** the model consistently returned `(cleaned_df, report)` as a tuple instead of following the letter of the contract above (`clean(df) -> pd.DataFrame`, `report` left as a separately accessible variable) — a natural Python idiom the prompt's explicit instruction didn't fully suppress at this model size. **Do not rely on prompt wording alone to prevent this.** The orchestrator's execution harness (the fixed wrapper code that calls `clean(df)` inside the sandbox, described in "Verification" above) must accept both shapes: a bare DataFrame return, or a `(df, report)` tuple. This was implemented and confirmed working in the spike — see `harness_template.py`'s handling there for the exact pattern to carry into the real FastAPI implementation.

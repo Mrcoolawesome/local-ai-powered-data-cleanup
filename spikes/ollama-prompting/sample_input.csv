@@ -1,0 +1,7 @@
+first_name,last_name,mobile_phone,home_phone,email,street_address,city,state,postal_code
+Alice,Nguyen,(555) 123-4567,,alice.nguyen@example.com,12 Birch St,Springfield,IL,62701
+Bob,,555-234-5678,555-234-9999,,44 Oak Ave,Springfield,IL,62702
+Carla,Reyes,,555.345.6789,carla.reyes@example.com,7 Maple Dr,Shelbyville,IL,62565
+David,Chen,5554456789,,,90 Pine Rd,Shelbyville,IL,62565
+Emma,Patel,,,,,,,
+Frank,Osei,(555) 567-8901,555-567-0000,frank.osei@example.com,21 Cedar Ln,Springfield,IL,62701
