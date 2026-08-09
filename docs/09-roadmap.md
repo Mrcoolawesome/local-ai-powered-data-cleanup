@@ -1,0 +1,71 @@
+# Development Roadmap
+
+Phased so each phase produces something runnable/demoable, and so the two highest-risk pieces (Zoom bot, Lighthouse schema integration) get de-risked early without blocking the core pipeline — which is the actual point of this tool — from progressing in parallel.
+
+## Phase 0 — Foundations & Spikes (de-risking, no app code depends on these succeeding)
+
+- [ ] **Zoom spike:** standalone Xvfb + Chromium + Zoom Linux Meeting SDK `startShareView` proof-of-concept per [07-zoom-bot.md](./07-zoom-bot.md). Outcome: proceed with native design, or move to a fallback.
+- [ ] **Docker sandbox spike:** run an untrusted Python snippet in a locked-down container (no network, resource limits, timeout), confirm stdout/stderr/file-output capture works end to end. This is the pattern every later phase's code execution depends on.
+- [ ] **Ollama connectivity + model check:** confirm `gemma4-e4b-262k:latest` is reachable at `devin-server:11434` from the dev/app environment, and do a quick quality check generating a Pandas script from a sample messy sheet (there's real sample data available per the scraper folders) to sanity-check the prompting approach in [05-llm-prompting.md](./05-llm-prompting.md) before building the full pipeline around it.
+- [ ] **Lighthouse schema access:** locate the `crunchwrap_supreme` / `data_transformer/schemas.ex` codebase referenced by the HCP scraper README and determine the concrete integration mechanism (shared package, exported JSON, read-only DB reference, manual sync) for mirroring its target schemas — this was flagged as an open item during planning and needs to resolve before Phase 2's `TargetSchema` design is finalized for entities Lighthouse already owns.
+
+## Phase 1 — Core Scaffolding
+
+- Next.js app: Tailwind + shadcn/ui installed, base layout.
+- NextAuth.js authentication.
+- Prisma schema v1 from [02-data-model.md](./02-data-model.md) (start with `User`, `Settings` — including the UI-editable Ollama endpoint).
+- FastAPI service skeleton with an Ollama client wrapper reading the configurable endpoint.
+- Local dev environment wiring (Postgres, the two services) so a fresh clone can get running quickly.
+
+## Phase 2 — File Ingestion & Rules Config
+
+- Manual file upload UI + disk storage pattern + `UploadedFile` records.
+- `TargetSchema` + `CleaningRule` UI (create/edit), including the Lighthouse-mirrored schemas resolved in Phase 0.
+- Prisma models for `TargetSchema`, `CleaningRule`, `Dataset`.
+
+## Phase 3 — AI Cleaning Engine
+
+- FastAPI `/clean/generate` endpoint implementing the script-generation prompt from [05-llm-prompting.md](./05-llm-prompting.md).
+- Docker sandbox executor (productionizing the Phase 0 spike) wired to actually run generated scripts against uploaded files.
+- Audit report generation (templated from sandbox execution stats, not a second free-form LLM call) per [04-ai-cleaning-and-audit.md](./04-ai-cleaning-and-audit.md).
+- `CleaningRun` + `AuditReport` persistence.
+
+## Phase 4 — Human-in-the-Loop Chat
+
+- Chat UI (`ChatSession`/`ChatMessage`), rendering the initial audit report as the first message.
+- Intent-classification step (edit vs. audit vs. question) per [04-ai-cleaning-and-audit.md](./04-ai-cleaning-and-audit.md).
+- LangChain/PandasAI agent wired for iterative edits, routed through the same sandbox as Phase 3 — no separate "trusted" code path.
+- On-demand full-audit trigger.
+
+## Phase 5 — Scraper Agent
+
+- `ScraperDefinition` registration (starting with the two House Call Pro examples already on hand).
+- README-reading command-planning agent per [05-llm-prompting.md](./05-llm-prompting.md)'s scraper-planning prompt.
+- Sandbox-execute scraper runs (credentials mounted, not exposed to the model).
+- Output-structure-aware ingestion into `UploadedFile`/`Attachment`.
+- Extend to the remaining ~5 scraper platforms once the pattern is proven on House Call Pro.
+
+## Phase 6 — Zoom Presentation Bot
+
+- Only starts once Phase 0's Zoom spike has a validated approach (native or fallback).
+- `/present/[sessionId]` route.
+- Zoom Bot Service productionized from the spike.
+
+## Phase 7 — Raspberry Pi Controller
+
+- WebSocket server for `PresentationSession` control ([08-raspberry-pi-controller.md](./08-raspberry-pi-controller.md)).
+- Minimal Pi-side React kiosk UI.
+- End-to-end test: Pi button press → visible change in an actual Zoom share.
+
+## Phase 8 — Hardening & Polish
+
+- Multi-tenancy audit: verify every query path is scoped by `userId`.
+- Security pass on sandbox configuration and credential handling against [06-security-sandboxing.md](./06-security-sandboxing.md)'s threat model.
+- `AuditLog` completeness check — confirm every mutating action across every subsystem actually writes a log entry.
+- UI polish.
+
+## What's explicitly deferred past v1
+
+- Team/shared workspaces (see [02-data-model.md](./02-data-model.md) isolation model).
+- Auto-ingestion for scraper categories that only deliver via emailed export.
+- Scheduled/unattended scraper triggering (v1 is user-invoked only).
