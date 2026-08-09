@@ -17,7 +17,7 @@ Phased so each phase produces something runnable/demoable, and so the highest-ri
 - NextAuth.js authentication.
 - Prisma schema v1 from [02-data-model.md](./02-data-model.md) (start with `User`, `Settings` — including the UI-editable Ollama endpoint).
 - FastAPI service skeleton with an Ollama client wrapper reading the configurable endpoint.
-- Local dev environment wiring (Postgres, the two services) so a fresh clone can get running quickly.
+- **Docker Compose stack** (postgres + web + ai-service) per [11-deployment.md](./11-deployment.md) — this is the deployment model going forward, not just local dev convenience: the whole app starts/stops as one unit via `docker compose up`/`down`.
 
 ## Phase 2 — File Ingestion & Rules Config
 
