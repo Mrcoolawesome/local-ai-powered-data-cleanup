@@ -20,34 +20,36 @@ This proves the presentation-route half of the design ([docs/01-architecture.md]
 
 ## Stage 2 — Zoom Linux Meeting SDK join + `StartAppShare`
 
-**Status: compiles, links, and runs against the real SDK. `InitSDK` → `CreateAuthService` → JWT-signed `SDKAuth()` all verified working end-to-end against Zoom's actual auth servers (see "What's been proven" below). Only real credentials + a real test meeting are needed to get past auth and prove the actual join+share.**
+**Status: DONE. Ran against a real, live Zoom meeting — the bot joined, shared, and the project owner (present in the meeting) visually confirmed seeing the live-updating test page. This is the actual question the whole spike existed to answer, and it's answered: yes, this works.**
 
-The Zoom Meeting SDK for Linux (`zoom-meeting-sdk-linux_x86_64-7.1.5.4432`) is now in `zoom-sdk/` (gitignored — proprietary, ~330MB extracted). Everything in this section was written against its **real headers**, not guessed — see the comment block at the top of `zoom-sdk-integration/join_and_share.cpp` for exactly which header confirmed which API shape.
+The Zoom Meeting SDK for Linux (`zoom-meeting-sdk-linux_x86_64-7.1.5.4432`) is in `zoom-sdk/` (gitignored — proprietary, ~330MB extracted). Everything here was written against its **real headers**, not guessed — see the comment block at the top of `zoom-sdk-integration/join_and_share.cpp` for exactly which header confirmed which API shape.
 
-### What's been proven, concretely
+### The real run, end to end
 
-- `join_and_share.cpp` **compiles and links** against the real SDK headers/libs (`cmake --build build` succeeds).
-- **Two real, non-obvious build issues were hit and fixed** — worth knowing if this build ever needs redoing on different hardware:
-  1. `libmeetingsdk.so`'s embedded `DT_SONAME` is `libmeetingsdk.so.1`, but the file Zoom ships is named `libmeetingsdk.so` (no version suffix) — the dynamic loader looks for the SONAME, not the filename. Fix: a symlink `libmeetingsdk.so.1 → libmeetingsdk.so` inside `zoom-sdk/` (not committed — recreate it if you re-extract the SDK: `ln -sf libmeetingsdk.so zoom-sdk/libmeetingsdk.so.1`).
-  2. Linking our own `QCoreApplication` against the **system** Qt6 (6.10.2 here) while also loading `libmeetingsdk.so`'s **bundled** Qt6 caused `undefined symbol ... version Qt_6_PRIVATE_API` at runtime — two different Qt6 builds both claiming to provide `libQt6Core.so.6` in the same process, first-loaded-wins, and the bundled Qt6Gui/Qml/Quick/DBus libraries then can't find the private-ABI symbols they expect from *their own* Qt6Core build. Fixed by linking the SDK's own bundled `qt_libs/Qt/lib/libQt6Core.so.6` instead of system Qt6 (see `CMakeLists.txt` — we still use system Qt6 *headers* to compile against, since `QCoreApplication`'s public API is stable across Qt6 minor versions; only the *linked runtime lib* had to match the SDK's bundle).
-- **Ran it.** With placeholder (non-real) credentials: `InitSDK` succeeded, `CreateAuthService` succeeded, the hand-rolled JWT builder (HMAC-SHA256 per `auth_service_interface.h`'s documented `{appKey, iat, exp, tokenExp}` payload) produced a request Zoom's real auth backend accepted and evaluated, and the async callback correctly reported `AUTHRET_JWTTOKENWRONG` — the *correct* rejection for a bad key, not a crash, timeout, or malformed-request error. That confirms the entire pipeline up to the auth boundary: SDK init, event-loop wiring, JWT construction, and live network round-trip to Zoom, all work on this hardware.
+1. `InitSDK` → `CreateAuthService` → JWT-signed `SDKAuth()` — **succeeded** with real SDK Key/Secret from the project owner's Zoom Marketplace app.
+2. `Join()` with the real meeting number + passcode → `onMeetingStatusChanged` reported `MEETING_STATUS_INMEETING` — **the bot was a live participant in a real Zoom meeting.**
+3. `GetMeetingShareController()->StartAppShare()` against the real X11 window handle (found live via `xdotool search` against the Xvfb display, see `run-integration-test.sh`):
+   - First attempt: `SDKERR_NO_PERMISSION` — the meeting's "who can share" setting didn't allow a non-host participant to share. Fixed on the Zoom account side (Settings → In Meeting (Basic) → Screen sharing), not a code change.
+   - After the fix: **`SDKERR_SUCCESS`**, `onSharingStatus` fired, and the project owner confirmed seeing the test page's clock/tick counter live and updating in the meeting.
 
-### What's still needed — from you, not me
+### Two real, non-obvious build issues — worth knowing if this is ever rebuilt on different hardware
 
-1. **Real SDK Key + SDK Secret.** On your app's Zoom Marketplace dashboard, find "App Credentials" under the **Meeting SDK** feature (not the OAuth Client ID/Secret — those are a different feature and won't work here). Put them in `zoom-sdk-integration/.env` (copy `.env.example`, gitignored, never paste real values into chat).
-2. **A test meeting number + password** you control.
-3. **The actual window handle to share** — start stage 1's Xvfb (`./start-xvfb-chromium.sh`, or the container), then run `DISPLAY=:99 xdotool search --name Chromium` (or whatever the window title is) to get a real window ID, and format it per `.env.example`'s `ZOOM_SHARE_X_WINDOW_HANDLE`.
+1. `libmeetingsdk.so`'s embedded `DT_SONAME` is `libmeetingsdk.so.1`, but the file Zoom ships is named `libmeetingsdk.so` (no version suffix) — the dynamic loader looks for the SONAME, not the filename. Fix: a symlink `libmeetingsdk.so.1 → libmeetingsdk.so` inside `zoom-sdk/` (not committed — recreate it if you re-extract the SDK: `ln -sf libmeetingsdk.so zoom-sdk/libmeetingsdk.so.1`).
+2. Linking our own `QCoreApplication` against the **system** Qt6 while also loading `libmeetingsdk.so`'s **bundled** Qt6 caused `undefined symbol ... version Qt_6_PRIVATE_API` at runtime — two different Qt6 builds both claiming to provide `libQt6Core.so.6` in the same process, first-loaded-wins, and the bundled Qt6Gui/Qml/Quick/DBus libraries then can't find the private-ABI symbols they expect from *their own* Qt6Core build. Fixed by linking the SDK's own bundled `qt_libs/Qt/lib/libQt6Core.so.6` instead of system Qt6 (see `CMakeLists.txt` — system Qt6 *headers* are still fine to compile against; only the *linked runtime lib* had to match the SDK's bundle).
+3. A handful of transitive runtime libs (`libatomic1`, `libxcb-cursor0`, `libxcb-xtest0`, `libxkbcommon-x11-0`, `libnss3`) aren't pulled in automatically and have to be installed explicitly — see `zoom-sdk-integration/Dockerfile.integration-test`, which is the known-working environment.
 
-### Running it once you have those
+### Reproducing this run
 
 ```bash
 cd zoom-sdk-integration
-cmake -S . -B build && cmake --build build
-set -a; source .env; set +a   # loads ZOOM_SDK_KEY etc. into the environment
-./build/zoom_join_and_share
+docker build -f Dockerfile.integration-test -t zoom-spike-integration .
+docker run --rm --shm-size=512m -v "$(cd .. && pwd)":/work zoom-spike-integration \
+  bash -c 'ln -sf libmeetingsdk.so ../zoom-sdk/libmeetingsdk.so.1 && bash ./run-integration-test.sh'
 ```
 
-Have a human sit in the test meeting. Success criteria: they see the shared view live and updating, continuously, for several minutes, without the bot disconnecting or the share silently dropping. If that fails or proves unreliable, fall back per [docs/07-zoom-bot.md](../../docs/07-zoom-bot.md)'s fallback section (virtual webcam device, or the Zoom Browser SDK instead of native).
+Needs a filled-in `zoom-sdk-integration/.env` (copy `.env.example` — real SDK Key/Secret from the Meeting SDK feature on your Zoom Marketplace app, not OAuth credentials) and a meeting you're actively hosting live, since `run-integration-test.sh` does a real join.
+
+**Open item, not for this spike but for Phase 6 (production build-out):** the working config here relies on an anonymous `SDK_UT_WITHOUT_LOGIN` join plus a permissive account-wide screen-sharing setting. Decide then whether to keep that, or have the production bot join as an authenticated user with standing host/co-host privileges instead (more restrictive by default, doesn't depend on an account-wide setting staying correctly configured).
 
 ## Gitignored in this folder
 

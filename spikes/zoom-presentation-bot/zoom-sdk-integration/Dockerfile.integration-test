@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     imagemagick \
     python3 \
     cmake \
+    make \
     g++ \
     qt6-base-dev \
     libssl-dev \
