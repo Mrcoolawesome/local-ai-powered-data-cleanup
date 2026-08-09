@@ -1,0 +1,30 @@
+# Secrets — scraper .env files hold live customer platform credentials
+*.env
+.env
+.env.*
+!.env.example
+session.json
+
+# Scraper runtime artifacts — not source, and output/ contains real customer data
+example-scrapers/**/output/
+example-scrapers/**/venv/
+example-scrapers/**/node_modules/
+example-scrapers/**/__pycache__/
+example-scrapers/**/*.pyc
+example-scrapers/**/progress.json
+example-scrapers/**/jobs_api_cache.json
+
+# App dependencies / build output (populated once scaffolding lands)
+node_modules/
+.next/
+dist/
+build/
+__pycache__/
+*.pyc
+
+# Local file storage for uploads/attachments — never belongs in git
+/storage/
+/uploads/
+
+.DS_Store
+*.log
