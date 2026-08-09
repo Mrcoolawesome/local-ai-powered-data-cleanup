@@ -1,13 +1,12 @@
 # Development Roadmap
 
-Phased so each phase produces something runnable/demoable, and so the two highest-risk pieces (Zoom bot, Lighthouse schema integration) get de-risked early without blocking the core pipeline — which is the actual point of this tool — from progressing in parallel.
+Phased so each phase produces something runnable/demoable, and so the highest-risk piece (the Zoom bot) gets de-risked early without blocking the core pipeline — which is the actual point of this tool — from progressing in parallel.
 
 ## Phase 0 — Foundations & Spikes (de-risking, no app code depends on these succeeding)
 
 - [ ] **Zoom spike:** standalone Xvfb + Chromium + Zoom Linux Meeting SDK `startShareView` proof-of-concept per [07-zoom-bot.md](./07-zoom-bot.md). Outcome: proceed with native design, or move to a fallback.
 - [ ] **Docker sandbox spike:** run an untrusted Python snippet in a locked-down container (no network, resource limits, timeout), confirm stdout/stderr/file-output capture works end to end. This is the pattern every later phase's code execution depends on.
-- [ ] **Ollama connectivity + model check:** confirm `gemma4-e4b-262k:latest` is reachable at `devin-server:11434` from the dev/app environment, and do a quick quality check generating a Pandas script from a sample messy sheet (there's real sample data available per the scraper folders) to sanity-check the prompting approach in [05-llm-prompting.md](./05-llm-prompting.md) before building the full pipeline around it.
-- [ ] **Lighthouse schema access:** locate the `crunchwrap_supreme` / `data_transformer/schemas.ex` codebase referenced by the HCP scraper README and determine the concrete integration mechanism (shared package, exported JSON, read-only DB reference, manual sync) for mirroring its target schemas — this was flagged as an open item during planning and needs to resolve before Phase 2's `TargetSchema` design is finalized for entities Lighthouse already owns.
+- [ ] **Ollama connectivity + model check:** confirm `gemma4-e4b-262k:latest` is reachable at `devin-server:11434` from the dev/app environment, and do a quick quality check generating a Pandas script from the real example export in `/example-data` (gitignored — live customer PII) to sanity-check the prompting approach in [05-llm-prompting.md](./05-llm-prompting.md) before building the full pipeline around it.
 
 ## Phase 1 — Core Scaffolding
 
@@ -20,7 +19,8 @@ Phased so each phase produces something runnable/demoable, and so the two highes
 ## Phase 2 — File Ingestion & Rules Config
 
 - Manual file upload UI + disk storage pattern + `UploadedFile` records.
-- `TargetSchema` + `CleaningRule` UI (create/edit), including the Lighthouse-mirrored schemas resolved in Phase 0.
+- `TargetSchema` + `CleaningRule` UI (create/edit), seeded from the concrete column sets in [10-target-schema-reference.md](./10-target-schema-reference.md).
+- Required-vs-structurally-expected-empty distinction on `TargetSchema.columns` (see that doc's Design implication) so the Phase 3 audit report doesn't drown real gaps in expected sparsity.
 - Prisma models for `TargetSchema`, `CleaningRule`, `Dataset`.
 
 ## Phase 3 — AI Cleaning Engine

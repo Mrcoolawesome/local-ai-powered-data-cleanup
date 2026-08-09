@@ -5,6 +5,9 @@
 !.env.example
 session.json
 
+# Real customer data — contains live customer PII (names, emails, phones, addresses)
+/example-data/
+
 # Scraper runtime artifacts — not source, and output/ contains real customer data
 example-scrapers/**/output/
 example-scrapers/**/venv/
