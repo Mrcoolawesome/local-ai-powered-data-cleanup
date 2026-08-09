@@ -18,7 +18,7 @@ Every LLM-directed execution — a generated cleaning script, a chat-triggered D
 - **No network access by default.** Cleaning-script containers never need network — they operate on a file already on disk. Scraper containers are the one legitimate exception (they need to reach the target platform) and get network access scoped as narrowly as practical for that run, not a blanket-open container.
 - **Minimal, explicit filesystem mounts.** A cleaning-script container gets read access to the one input file and write access to one output path — not the whole storage root. A scraper container gets its own scraper directory (script, README, saved session/`.env`) mounted, and nothing else.
 - **Resource limits.** CPU/memory caps and a hard execution timeout (config value in `Settings`) on every container, so a runaway script or hung scraper process can't take down the host.
-- **Non-root container user**, ephemeral (removed after execution, not reused).
+- **Non-root container user**, ephemeral (removed after execution, not reused). Run as the orchestrating service's *own* uid/gid (`--user`) rather than a fixed in-image uid — see "Phase 0 spike status" below for why a fixed uid breaks bind-mounted output.
 - **No secrets in the LLM's own context.** The model never sees `.env` contents or session tokens — it only sees the *plan* (which command to run); the actual credential file is mounted directly into the sandbox container by the orchestrator, bypassing the model entirely.
 
 ## Credential handling
@@ -34,3 +34,16 @@ Any content the agent reads that it didn't author — a README, a scraped file's
 ## What this buys us vs. what it doesn't
 
 Containerization limits *blast radius* — a bad script corrupts a mounted file or wastes container resources, not the host filesystem or the database. It does not replace: reviewing generated scripts before they're trusted for a new `TargetSchema`/rule combination the system hasn't run before, monitoring `ScraperRun`/`CleaningRun` logs, or the human-in-the-loop audit step itself. Sandboxing is the containment layer; the audit chat is the correctness layer.
+
+## Phase 0 spike status — RESULT: pattern validated, 9/9 checks passing
+
+Spike lives in [`/spikes/docker-sandbox`](../spikes/docker-sandbox/README.md), run for real (not just read from `docker run` flag documentation):
+
+- **File I/O + stdout capture** — a well-behaved script read from the read-only input mount, wrote to the read-write output mount, and its stdout was captured. PASS.
+- **Network isolation (`--network none`)** — a script attempting an outbound socket connection got `[Errno 101] Network is unreachable`, not a successful connection. PASS.
+- **Timeout enforcement** — an infinite-loop script was killed within the configured window by the host-side `timeout` wrapper (not left hanging). PASS.
+- **Read-only input mount** — a script attempting to write into its input file got `[Errno 30] Read-only file system`; the original file was verified unmodified afterward. PASS.
+
+**One real issue found and fixed:** the fixed in-image `uid 10001` (`USER sandbox` in the Dockerfile) couldn't write to a bind-mounted output directory owned by the host user — a classic host/container UID mismatch. Fixed by running the container with `--user "$(id -u):$(id -g)"` (the *invoking* host user's own uid/gid) instead of a fixed in-image uid. Still non-root, still isolated, but ownership of bind-mounted directories now lines up automatically. This is the pattern the real FastAPI orchestration service should use: run sandbox containers as its own service uid, not a hardcoded one baked into the sandbox image.
+
+**Not yet stress-tested:** memory/CPU limits under actual pressure (a script that tries to exceed `--memory=256m`, or burn more than `--cpus=1`) — the flags are set and trusted per Docker's documented behavior, but not independently verified here since network/filesystem/timeout are the properties with real security consequences if wrong. Worth a quick check during Phase 3 implementation.

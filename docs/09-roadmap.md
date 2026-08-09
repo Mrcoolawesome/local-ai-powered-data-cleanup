@@ -6,7 +6,7 @@ Phased so each phase produces something runnable/demoable, and so the highest-ri
 
 - [x] **Zoom spike, stage 1 (Xvfb + Chromium):** done and passing — see [07-zoom-bot.md](./07-zoom-bot.md) status.
 - [x] **Zoom spike, stage 2 (Zoom Linux Meeting SDK join + `StartAppShare`):** fully working, visually confirmed. Bot joined a real, live meeting (`MEETING_STATUS_INMEETING`), `StartAppShare` returned `SDKERR_SUCCESS` after a Zoom sharing-permission fix, and the project owner confirmed seeing the live-updating test page shared in the meeting in real time. **Decision: proceed with the native design, no fallback needed** — see [07-zoom-bot.md](./07-zoom-bot.md) for full results.
-- [ ] **Docker sandbox spike:** run an untrusted Python snippet in a locked-down container (no network, resource limits, timeout), confirm stdout/stderr/file-output capture works end to end. This is the pattern every later phase's code execution depends on.
+- [x] **Docker sandbox spike:** done, 9/9 checks passing — file I/O, network isolation, timeout enforcement, and read-only mounts all verified for real, not just read from flag docs. Found and fixed a real host/container UID mismatch bug. See [06-security-sandboxing.md](./06-security-sandboxing.md) for full results.
 - [ ] **Ollama connectivity + model check:** confirm `gemma4-e4b-262k:latest` is reachable at `devin-server:11434` from the dev/app environment, and do a quick quality check generating a Pandas script from the real example export in `/example-data` (gitignored — live customer PII) to sanity-check the prompting approach in [05-llm-prompting.md](./05-llm-prompting.md) before building the full pipeline around it.
 
 ## Phase 1 — Core Scaffolding
