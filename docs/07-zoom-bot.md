@@ -1,6 +1,6 @@
 # Live Presentation Zoom Bot
 
-**Status: highest-risk module in this spec. Treat everything below as a design to validate with a spike (Phase 0), not a confirmed working plan.** See [00-overview.md](./00-overview.md) for why.
+**Status: spiked end-to-end against a real, live Zoom meeting. The native join+share mechanism is proven to work — the only remaining item is a Zoom account/meeting permission setting, not a technical blocker.** See "Phase 0 spike status" below for the actual run results.
 
 ## Why this is the risky one
 
@@ -33,11 +33,18 @@ If the spike shows the native window-handle share path is unreliable on this har
 
 Either fallback keeps the rest of the architecture (presentation route, WebSocket-driven view switching) unchanged — only the join/share mechanism changes. This is why the presentation route and the Zoom-joining mechanism are kept as separate concerns above.
 
-## Phase 0 spike status
+## Phase 0 spike status — RESULT: native join+share works; sharing is blocked by a Zoom permission setting
 
-Spike lives in [`/spikes/zoom-presentation-bot`](../spikes/zoom-presentation-bot/README.md), split into two stages that fail for different reasons:
+Spike lives in [`/spikes/zoom-presentation-bot`](../spikes/zoom-presentation-bot/README.md). Both stages ran for real, against a live meeting the project owner hosted:
 
-- **Stage 1 (Xvfb + Chromium render a live page headlessly) — done, tested, passing.** Built and actually run in a Docker container: two screenshots taken a few seconds apart differed by ~2,000 pixels, confirming the page was live-updating (a clock/tick counter), not a frozen frame. This validates the presentation-route half of the design.
-- **Stage 2 (Zoom Linux Meeting SDK join + `StartAppShare`) — SDK obtained, real code written against real headers, compiles/links/runs. Blocked only on real credentials + a test meeting.** The SDK tarball is in `zoom-sdk/` (gitignored). `join_and_share.cpp` is written against the actual API (confirmed by reading the real headers, not guessed): JWT-based `SDKAuth`, `Join` with `SDK_UT_WITHOUT_LOGIN`, `GetMeetingShareController()->StartAppShare()` with the X11 device-name string format the SDK's own docs specify. It **builds and runs successfully** — verified with placeholder credentials, which correctly got rejected (`AUTHRET_JWTTOKENWRONG`) by Zoom's real auth backend rather than crashing, confirming SDK init, event-loop wiring, JWT construction, and the live network round-trip all work on this hardware. **This is the actual open question this spike exists to answer**, and everything up to real-credential auth is now proven — only the final join+share step (needs the project owner's real SDK Key/Secret and a test meeting, see `/spikes/zoom-presentation-bot/README.md`) remains untested.
+- **Stage 1 (Xvfb + Chromium render a live page headlessly) — done, passing.** Two screenshots a few seconds apart differed by ~2,000 pixels, confirming the page was live-updating, not a frozen frame.
+- **Stage 2 (Zoom Linux Meeting SDK join + `StartAppShare`) — the bot actually joined a real, live meeting.** `join_and_share.cpp`, written against the real SDK headers, ran the full pipeline against Zoom's production servers: `InitSDK` → JWT-signed `SDKAuth` (succeeded with real SDK Key/Secret) → `Join` with the real meeting number + passcode → **`onMeetingStatusChanged` reported `MEETING_STATUS_INMEETING`** — i.e. the bot was a live participant in a real Zoom meeting. It then called `GetMeetingShareController()->StartAppShare()` against the real X11 window handle (found live via `xdotool` against the Xvfb display) and got back **`SDKERR_NO_PERMISSION`** (SDKError 12, per `zoom_sdk_def.h`'s own `SDKError` enum) — the meeting's "who can share" setting doesn't currently allow this anonymous, not-logged-in bot participant to share.
 
-Success criteria for the final step: a human in a real test meeting sees the same live-updating test page shared continuously for several minutes without the bot disconnecting or the share dropping.
+**This is not a technical blocker.** Every mechanical piece — SDK init, auth, live network join, finding the right window, calling the share API with the correctly-formatted handle — works. What's needed to close this out:
+- Set the meeting/account's screen-share permission (Zoom web portal → Settings → In Meeting (Basic) → Screen sharing → "Who can share?") to allow participants, not just the host, **or**
+- Have the bot join as an authenticated user with host/co-host privileges instead of the current anonymous `SDK_UT_WITHOUT_LOGIN` join, **or**
+- Have the meeting host manually promote the bot to co-host after it joins (impractical for unattended production use, fine for finishing this spike).
+
+Once one of those is in place, rerun `spikes/zoom-presentation-bot/zoom-sdk-integration/run-integration-test.sh` (or the Docker-wrapped version in its README) against a live meeting — success criteria: a human in the meeting sees the live-updating test page shared continuously for several minutes without the bot disconnecting or the share dropping.
+
+**Two real build/runtime issues were found and fixed along the way** (documented in detail in `/spikes/zoom-presentation-bot/README.md` and `zoom-sdk-integration/CMakeLists.txt`), useful if this is ever rebuilt on different hardware: the SDK's shipped filename doesn't match its embedded `SONAME` (needs a symlink), and linking against the system's Qt6 instead of the SDK's bundled Qt6 causes a private-ABI symbol mismatch at runtime (must link the SDK's own bundled `libQt6Core.so.6`).
