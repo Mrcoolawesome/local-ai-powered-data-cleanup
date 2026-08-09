@@ -33,6 +33,11 @@ If the spike shows the native window-handle share path is unreliable on this har
 
 Either fallback keeps the rest of the architecture (presentation route, WebSocket-driven view switching) unchanged — only the join/share mechanism changes. This is why the presentation route and the Zoom-joining mechanism are kept as separate concerns above.
 
-## Phase 0 spike scope
+## Phase 0 spike status
 
-A minimal standalone script (not integrated into the main app) that: starts `Xvfb`, opens a static test page in Chromium against it, joins a real (test) Zoom meeting via the Linux Meeting SDK, and calls `startShareView` against the Xvfb handle. Success criteria: a human in the test meeting sees the static page shared continuously for several minutes without the bot disconnecting or the share dropping. This determines whether the rest of this document's design proceeds as written or moves to a fallback.
+Spike lives in [`/spikes/zoom-presentation-bot`](../spikes/zoom-presentation-bot/README.md), split into two stages that fail for different reasons:
+
+- **Stage 1 (Xvfb + Chromium render a live page headlessly) — done, tested, passing.** Built and actually run in a Docker container: two screenshots taken a few seconds apart differed by ~2,000 pixels, confirming the page was live-updating (a clock/tick counter), not a frozen frame. This validates the presentation-route half of the design.
+- **Stage 2 (Zoom Linux Meeting SDK join + `startShareView`) — blocked on credentials only the project owner can obtain.** The Linux Meeting SDK is a proprietary download gated behind an authenticated Zoom Marketplace developer account (a "General App" with Meeting SDK enabled, giving an SDK Key/Secret, plus the SDK tarball itself). A C++ skeleton with the exact join/auth/share steps is in place at `zoom-sdk-integration/`, but it cannot compile or run until that SDK is downloaded and dropped in. **This is the actual open question this spike exists to answer** — proceed with native design vs. fall back — and it's still open pending that download.
+
+Success criteria for stage 2, once runnable: a human in a real test meeting sees the same live-updating test page shared continuously for several minutes without the bot disconnecting or the share dropping.

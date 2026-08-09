@@ -4,7 +4,8 @@ Phased so each phase produces something runnable/demoable, and so the highest-ri
 
 ## Phase 0 — Foundations & Spikes (de-risking, no app code depends on these succeeding)
 
-- [ ] **Zoom spike:** standalone Xvfb + Chromium + Zoom Linux Meeting SDK `startShareView` proof-of-concept per [07-zoom-bot.md](./07-zoom-bot.md). Outcome: proceed with native design, or move to a fallback.
+- [x] **Zoom spike, stage 1 (Xvfb + Chromium):** done and passing — see [07-zoom-bot.md](./07-zoom-bot.md) status.
+- [ ] **Zoom spike, stage 2 (Zoom Linux Meeting SDK join + `startShareView`):** blocked on the project owner downloading the SDK from Zoom's Marketplace developer portal — see [`/spikes/zoom-presentation-bot/README.md`](../spikes/zoom-presentation-bot/README.md) for the exact checklist. Outcome once unblocked: proceed with native design, or move to a fallback.
 - [ ] **Docker sandbox spike:** run an untrusted Python snippet in a locked-down container (no network, resource limits, timeout), confirm stdout/stderr/file-output capture works end to end. This is the pattern every later phase's code execution depends on.
 - [ ] **Ollama connectivity + model check:** confirm `gemma4-e4b-262k:latest` is reachable at `devin-server:11434` from the dev/app environment, and do a quick quality check generating a Pandas script from the real example export in `/example-data` (gitignored — live customer PII) to sanity-check the prompting approach in [05-llm-prompting.md](./05-llm-prompting.md) before building the full pipeline around it.
 
