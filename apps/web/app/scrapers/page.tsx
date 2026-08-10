@@ -1,18 +1,26 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
+import path from "path";
 import { revalidatePath } from "next/cache";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { discoverScrapers } from "@/lib/scrapers-fs";
+import { discoverScrapers, extractScraperZip, ScraperUploadError } from "@/lib/scrapers-fs";
 import { AppNav } from "@/components/app-nav";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 
-export default async function ScrapersPage() {
+export default async function ScrapersPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ error?: string }>;
+}) {
   const session = await auth();
   if (!session?.user) redirect("/login");
+  const { error } = await searchParams;
 
   const [registered, discovered] = await Promise.all([
     prisma.scraperDefinition.findMany({
@@ -46,6 +54,30 @@ export default async function ScrapersPage() {
         runtime,
       },
     });
+    revalidatePath("/scrapers");
+  }
+
+  async function uploadZip(formData: FormData) {
+    "use server";
+    const session = await auth();
+    if (!session?.user) redirect("/login");
+
+    const file = formData.get("file") as File;
+    if (!file || file.size === 0) redirect(`/scrapers?error=${encodeURIComponent("No file selected.")}`);
+    if (!file.name.toLowerCase().endsWith(".zip")) {
+      redirect(`/scrapers?error=${encodeURIComponent("Only .zip files are accepted.")}`);
+    }
+
+    const buffer = Buffer.from(await file.arrayBuffer());
+    const suggestedName = path.basename(file.name, path.extname(file.name));
+
+    try {
+      await extractScraperZip(buffer, suggestedName);
+    } catch (e) {
+      const message = e instanceof ScraperUploadError ? e.message : "Failed to extract zip.";
+      redirect(`/scrapers?error=${encodeURIComponent(message)}`);
+    }
+
     revalidatePath("/scrapers");
   }
 
@@ -99,6 +131,26 @@ export default async function ScrapersPage() {
       </div>
 
       <Separator />
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Upload a scraper</CardTitle>
+          <CardDescription>
+            A .zip of the scraper&apos;s script + README (a saved session/.env can be included too) — extracted onto
+            the scrapers root and shown below to register, same as one dropped in by hand.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          {error && <p className="text-destructive text-sm">{decodeURIComponent(error)}</p>}
+          <form action={uploadZip} className="flex items-end gap-3">
+            <div className="flex flex-1 flex-col gap-2">
+              <Label htmlFor="scraper-zip">Zip file</Label>
+              <Input id="scraper-zip" name="file" type="file" accept=".zip" required />
+            </div>
+            <Button type="submit">Upload</Button>
+          </form>
+        </CardContent>
+      </Card>
 
       <div className="flex flex-col gap-3">
         <h2 className="text-lg font-medium">Discovered, not yet registered</h2>

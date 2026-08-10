@@ -85,11 +85,13 @@ services:
       - "${WEB_WS_PORT:-3001}:3001"
     volumes:
       - ./storage:/app/storage
-      # Real scraper installs (docs/03-ingestion-and-scrapers.md), starting
-      # with the House Call Pro examples already on hand — read-only here,
-      # `web` only ever browses READMEs for registration, never executes
-      # anything or touches credentials.
-      - ./example-scrapers:/app/scrapers:ro
+      # Real scraper installs (docs/03-ingestion-and-scrapers.md). Read-write
+      # since `web` now also extracts uploaded scraper .zips here
+      # (lib/scrapers-fs.ts's extractScraperZip) — no longer read-only as
+      # it was through Phase 5, when `web` only ever browsed READMEs.
+      # `web` still never *executes* a scraper or reads its credentials;
+      # that stays ai-service's job over in the sandbox executor.
+      - ./example-scrapers:/app/scrapers
     depends_on:
       migrator:
         condition: service_completed_successfully
