@@ -31,6 +31,7 @@ from app.schema_inference import SchemaInferenceError, compute_summary_stats, ge
 from app.scraper_fs import ScraperFsError, find_credentials_example_file, read_readme, write_credentials_env
 from app.scraper_sandbox import (
     ScraperSandboxError,
+    cancel_scraper,
     list_files_modified_since,
     poll_scraper,
     send_scraper_input,
@@ -586,3 +587,19 @@ async def scraper_input(req: ScraperInputRequest):
     except ScraperSandboxError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
     return {"status": "ok"}
+
+
+class ScraperCancelRequest(BaseModel):
+    container_id: str
+
+
+@app.post("/scraper/cancel")
+async def scraper_cancel(req: ScraperCancelRequest):
+    """Kills a still-running scraper container on request — e.g. one
+    paused on AWAITING_INPUT for a code that's never going to arrive.
+    Idempotent (cancel_scraper treats an already-gone container as a
+    no-op), so this is safe to call even if the run finished on its own
+    a moment before the human clicked cancel.
+    """
+    result = await run_in_threadpool(cancel_scraper, req.container_id)
+    return result

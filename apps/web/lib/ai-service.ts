@@ -235,3 +235,11 @@ export function submitScraperInput(params: { containerId: string; text: string }
     text: params.text,
   });
 }
+
+// Kills a still-running (or AWAITING_INPUT) scraper container on request
+// — e.g. one paused on a 2FA code that's never arriving. Idempotent on
+// the ai-service side, so safe to call even if the run already finished
+// on its own moments before the human clicked cancel.
+export function cancelScraperRun(params: { containerId: string }) {
+  return postJson<{ logs: string }>("/scraper/cancel", { container_id: params.containerId });
+}

@@ -250,6 +250,29 @@ def send_scraper_input(container_id: str, text: str) -> None:
         sock.close()
 
 
+def cancel_scraper(container_id: str) -> dict:
+    """Kills and removes a still-running (RUNNING or, just as often in
+    practice, AWAITING_INPUT — e.g. paused on a 2FA code that's simply
+    never coming) container on request. Returns whatever it had logged up
+    to that point, for the record. Idempotent: a container that already
+    exited on its own between the UI click and this call (or was already
+    canceled once) is treated as already-gone, not an error.
+    """
+    client = _client()
+    try:
+        container = client.containers.get(container_id)
+    except NotFound:
+        return {"logs": ""}
+    try:
+        container.kill()
+    except Exception:
+        pass
+    container.reload()
+    logs = container.logs().decode(errors="replace")
+    container.remove(force=True)
+    return {"logs": logs}
+
+
 def list_files_modified_since(scraper_dir_relative_path: str, since_epoch: float) -> list[str]:
     """Real, adaptive ingestion — walks the scraper's directory for files
     that changed during THIS run, rather than requiring a hardcoded

@@ -8,6 +8,7 @@ import {
   executeScraper,
   pollScraperRun,
   submitScraperInput,
+  cancelScraperRun,
   writeScraperCredentials,
   AiServiceError,
 } from "@/lib/ai-service";
@@ -312,6 +313,39 @@ export default async function ScraperDetailPage({
     await prisma.scraperRun.update({ where: { id: run.id }, data: { status: "RUNNING", pendingPrompt: null } });
   }
 
+  // Lets a human stop a RUNNING or AWAITING_INPUT run outright — the
+  // concrete case that motivated this: a run paused waiting on a 2FA code
+  // that's never going to arrive has no other way to end. Marked
+  // INTERRUPTED, same status a timeout produces — both mean "we stopped
+  // this before it finished on its own."
+  async function cancelScraperRunAction(runId: string) {
+    "use server";
+    const session = await auth();
+    if (!session?.user) redirect("/login");
+
+    const run = await prisma.scraperRun.findFirst({
+      where: { id: runId, scraperDefinition: { userId: session.user.id } },
+    });
+    if (!run || (run.status !== "RUNNING" && run.status !== "AWAITING_INPUT")) return;
+
+    let logOutput = run.logOutput;
+    if (run.containerId) {
+      try {
+        const result = await cancelScraperRun({ containerId: run.containerId });
+        if (result.logs) logOutput = result.logs;
+      } catch {
+        // Best-effort — still mark it cancelled even if ai-service couldn't
+        // be reached, rather than leaving the run stuck showing as live.
+      }
+    }
+
+    await prisma.scraperRun.update({
+      where: { id: run.id },
+      data: { status: "INTERRUPTED", logOutput, finishedAt: new Date(), containerId: null, pendingPrompt: null },
+    });
+    revalidatePath(`/scrapers/${id}`);
+  }
+
   async function deleteScraper(formData: FormData) {
     "use server";
     const session = await auth();
@@ -504,6 +538,7 @@ export default async function ScraperDetailPage({
             }}
             pollAction={pollScraperRunStatus}
             submitInputAction={submitScraperRunInput}
+            cancelAction={cancelScraperRunAction}
           />
         ))}
       </div>

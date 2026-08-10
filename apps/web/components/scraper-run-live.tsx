@@ -39,14 +39,17 @@ export function ScraperRunLive({
   run: initialRun,
   pollAction,
   submitInputAction,
+  cancelAction,
 }: {
   run: ScraperRunSummary;
   pollAction: (runId: string) => Promise<ScraperRunPollResult>;
   submitInputAction: (runId: string, text: string) => Promise<void>;
+  cancelAction: (runId: string) => Promise<void>;
 }) {
   const [run, setRun] = useState(initialRun);
   const [inputValue, setInputValue] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [canceling, setCanceling] = useState(false);
   const pollingRef = useRef(false);
 
   const isLive = run.status === "RUNNING" || run.status === "AWAITING_INPUT";
@@ -103,6 +106,18 @@ export function ScraperRunLive({
     }
   }
 
+  // The concrete case this exists for: a run paused on AWAITING_INPUT for
+  // a code that's simply never arriving has no other way to end.
+  async function handleCancel() {
+    setCanceling(true);
+    try {
+      await cancelAction(run.id);
+      setRun((prev) => ({ ...prev, status: "INTERRUPTED", pendingPrompt: null, finishedAt: new Date().toISOString() }));
+    } finally {
+      setCanceling(false);
+    }
+  }
+
   return (
     <Card>
       <CardHeader>
@@ -127,7 +142,7 @@ export function ScraperRunLive({
           {run.filesIngestedCount} file{run.filesIngestedCount === 1 ? "" : "s"} ingested
         </CardDescription>
       </CardHeader>
-      {(run.status === "AWAITING_INPUT" || run.logOutput) && (
+      {(isLive || run.logOutput) && (
         <CardContent className="flex flex-col gap-3">
           {run.status === "AWAITING_INPUT" && (
             <div className="flex flex-col gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3">
@@ -159,6 +174,18 @@ export function ScraperRunLive({
             <pre className="max-h-40 overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap">
               {run.logOutput}
             </pre>
+          )}
+          {isLive && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="w-fit"
+              onClick={handleCancel}
+              disabled={canceling}
+            >
+              {canceling ? "Cancelling…" : "Cancel run"}
+            </Button>
           )}
         </CardContent>
       )}
