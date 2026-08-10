@@ -5,7 +5,6 @@ Ollama-specific. It never talks to Postgres directly (Next.js does, via
 Prisma) — Next.js calls this service and persists whatever it returns.
 """
 import os
-import time
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -30,7 +29,13 @@ from app.prompting import (
 from app.sandbox import SandboxError, run_cleaning
 from app.schema_inference import SchemaInferenceError, compute_summary_stats, get_current_columns, infer_schema
 from app.scraper_fs import ScraperFsError, find_credentials_example_file, read_readme, write_credentials_env
-from app.scraper_sandbox import ScraperSandboxError, list_files_modified_since, run_scraper
+from app.scraper_sandbox import (
+    ScraperSandboxError,
+    list_files_modified_since,
+    poll_scraper,
+    send_scraper_input,
+    start_scraper,
+)
 
 app = FastAPI(title="data-cleanup ai-service")
 
@@ -493,33 +498,91 @@ class ExecuteScraperRequest(BaseModel):
     runtime: str
     setup_commands: list[str] = []
     run_command: str
-    watch_signals: list[str] = []
-    timeout_seconds: int = 300
 
 
 @app.post("/scraper/execute")
 async def execute_scraper(req: ExecuteScraperRequest):
-    """Actually runs a scraper — network-enabled, the scraper's own
-    directory (including its saved session/.env) mounted read-write. This
-    is the consequential endpoint in this whole subsystem: it makes real
-    requests against whatever platform the scraper targets, using
+    """Starts a scraper — network-enabled, the scraper's own directory
+    (including its saved session/.env) mounted read-write — and returns
+    immediately with a container id, WITHOUT waiting for it to finish.
+    This is the consequential endpoint in this whole subsystem: it makes
+    real requests against whatever platform the scraper targets, using
     whatever credentials are sitting in that directory. Next.js is
     expected to have gotten explicit user confirmation before calling
     this — see docs/03-ingestion-and-scrapers.md.
+
+    Deliberately fire-and-forget rather than blocking for the whole run
+    (like the rest of this service's endpoints do): a run can legitimately
+    pause for a long, unbounded stretch waiting on a human to answer a
+    prompt (AWAITING_INPUT — see scraper_sandbox.py's module docstring),
+    which a single HTTP request can't sensibly block for. Callers poll
+    /scraper/status instead.
     """
-    started_at = time.time()
     try:
         result = await run_in_threadpool(
-            run_scraper,
+            start_scraper,
             req.scraper_dir_relative_path,
             req.runtime,
             req.setup_commands,
             req.run_command,
+        )
+    except ScraperSandboxError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    return result
+
+
+class ScraperStatusRequest(BaseModel):
+    container_id: str
+    scraper_dir_relative_path: str
+    watch_signals: list[str] = []
+    timeout_seconds: int = 300
+    # Epoch seconds — the caller's own record of when this run started
+    # (Next.js already has this as ScraperRun.startedAt), not something
+    # this stateless service tracks itself.
+    started_at: float
+
+
+@app.post("/scraper/status")
+async def scraper_status(req: ScraperStatusRequest):
+    """Polled repeatedly by Next.js while a run is RUNNING or
+    AWAITING_INPUT. Only computes new_files (a real directory walk) once
+    the container has actually exited — pointless work on every poll
+    otherwise.
+    """
+    try:
+        result = await run_in_threadpool(
+            poll_scraper,
+            req.container_id,
             req.watch_signals,
             req.timeout_seconds,
+            req.started_at,
         )
     except ScraperSandboxError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
 
-    new_files = await run_in_threadpool(list_files_modified_since, req.scraper_dir_relative_path, started_at)
-    return {**result, "new_files": new_files}
+    if result["state"] == "exited":
+        new_files = await run_in_threadpool(
+            list_files_modified_since, req.scraper_dir_relative_path, req.started_at
+        )
+        result = {**result, "new_files": new_files}
+    return result
+
+
+class ScraperInputRequest(BaseModel):
+    container_id: str
+    text: str
+
+
+@app.post("/scraper/input")
+async def scraper_input(req: ScraperInputRequest):
+    """Relays a human-submitted value (e.g. a 2FA code) into a still-
+    running container's stdin — the other half of the AWAITING_INPUT
+    marker convention (scraper_sandbox.py). Nothing here is logged; the
+    text a user types here can be as sensitive as the prompt that asked
+    for it.
+    """
+    try:
+        await run_in_threadpool(send_scraper_input, req.container_id, req.text)
+    except ScraperSandboxError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    return {"status": "ok"}

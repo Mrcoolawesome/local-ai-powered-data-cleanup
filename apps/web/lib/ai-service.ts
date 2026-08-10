@@ -178,28 +178,60 @@ export function writeScraperCredentials(params: {
   });
 }
 
-export type ScraperExecutionResult = {
-  exit_code: number;
-  logs: string;
-  matched_signals: string[];
-  timed_out: boolean;
-  new_files: string[];
-};
-
+// executeScraper only STARTS the container — it deliberately does not wait
+// for the run to finish (docs/03-ingestion-and-scrapers.md's "real-time
+// execution model": a run can pause indefinitely on AWAITING_INPUT waiting
+// for a human, which a single request/response can't sensibly block for).
+// Callers poll pollScraperRun with the returned container id until it
+// reports "exited".
 export function executeScraper(params: {
   scraperDirRelativePath: string;
   runtime: "PYTHON" | "NODE";
   setupCommands: string[];
   runCommand: string;
-  watchSignals: string[];
-  timeoutSeconds?: number;
 }) {
-  return postJson<ScraperExecutionResult>("/scraper/execute", {
+  return postJson<{ container_id: string }>("/scraper/execute", {
     scraper_dir_relative_path: params.scraperDirRelativePath,
     runtime: params.runtime,
     setup_commands: params.setupCommands,
     run_command: params.runCommand,
+  });
+}
+
+export type ScraperPollResult =
+  | { state: "running"; logs: string }
+  | { state: "awaiting_input"; pending_prompt: string; logs: string }
+  | {
+      state: "exited";
+      exit_code: number;
+      logs: string;
+      matched_signals: string[];
+      timed_out: boolean;
+      new_files: string[];
+    };
+
+export function pollScraperRun(params: {
+  containerId: string;
+  scraperDirRelativePath: string;
+  watchSignals: string[];
+  timeoutSeconds: number;
+  // Epoch seconds — pass ScraperRun.startedAt (converted), not a fresh
+  // timestamp, so the timeout budget is measured from when the run
+  // actually started, not from whenever a given poll happens to fire.
+  startedAt: number;
+}) {
+  return postJson<ScraperPollResult>("/scraper/status", {
+    container_id: params.containerId,
+    scraper_dir_relative_path: params.scraperDirRelativePath,
     watch_signals: params.watchSignals,
-    timeout_seconds: params.timeoutSeconds ?? 300,
+    timeout_seconds: params.timeoutSeconds,
+    started_at: params.startedAt,
+  });
+}
+
+export function submitScraperInput(params: { containerId: string; text: string }) {
+  return postJson<{ status: string }>("/scraper/input", {
+    container_id: params.containerId,
+    text: params.text,
   });
 }

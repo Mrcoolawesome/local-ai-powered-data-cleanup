@@ -3,9 +3,17 @@ import Link from "next/link";
 import { revalidatePath } from "next/cache";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { planScraperCommand, executeScraper, writeScraperCredentials, AiServiceError } from "@/lib/ai-service";
+import {
+  planScraperCommand,
+  executeScraper,
+  pollScraperRun,
+  submitScraperInput,
+  writeScraperCredentials,
+  AiServiceError,
+} from "@/lib/ai-service";
 import { ingestScraperOutputFile } from "@/lib/scraper-ingest";
 import { deleteScraperDirectory } from "@/lib/scrapers-fs";
+import { ScraperRunLive, type ScraperRunPollResult } from "@/components/scraper-run-live";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,6 +21,12 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
+
+// ai-service's default per-container timeout — same value the old
+// synchronous run_scraper() used, now enforced across polls instead of a
+// single blocking wait (docs/03-ingestion-and-scrapers.md). A container
+// AWAITING_INPUT is exempt from it (scraper_sandbox.py's poll_scraper).
+const SCRAPER_TIMEOUT_SECONDS = 300;
 
 export default async function ScraperDetailPage({
   params,
@@ -83,10 +97,10 @@ export default async function ScraperDetailPage({
       .split("\n")
       .map((s) => s.trim())
       .filter(Boolean);
-    const watchSignals = (formData.get("watchSignals") as string)
-      .split("\n")
-      .map((s) => s.trim())
-      .filter(Boolean);
+    // watch_signals isn't read from the form here — it's already inside
+    // planJson below (the plan's own watch_signals field), which
+    // pollScraperRunStatus reads back out at poll time. The "watchSignals"
+    // hidden field still exists for the plan preview UI above.
     const planJson = JSON.parse(formData.get("planJson") as string);
     const credentialsEnvFilename = formData.get("credentialsEnvFilename") as string;
     const credentialsEnvTemplate = formData.get("credentialsEnvTemplate") as string;
@@ -135,47 +149,20 @@ export default async function ScraperDetailPage({
         });
       }
 
-      const result = await executeScraper({
+      // Only STARTS the container — does not wait for it to finish. The
+      // run stays RUNNING; ScraperRunLive (a client component) takes over
+      // from here, polling pollScraperRunStatus until the run reaches a
+      // terminal status. watchSignals isn't persisted separately — it's
+      // already inside planJson (formData's "planJson" field is the full
+      // plan, watch_signals included), which pollScraperRunStatus reads
+      // back out at poll time.
+      const { container_id } = await executeScraper({
         scraperDirRelativePath: definition.scriptPath,
         runtime: definition.runtime,
         setupCommands,
         runCommand,
-        watchSignals,
       });
-
-      let filesIngested = 0;
-      for (const filePath of result.new_files) {
-        const ingested = await ingestScraperOutputFile(definition.scriptPath, filePath, run.id);
-        if (ingested.kind === "dataset") {
-          await prisma.uploadedFile.create({
-            data: {
-              userId: session.user.id,
-              filePath: ingested.storageRelativePath,
-              originalFilename: ingested.originalFilename,
-              sourceType: "SCRAPER",
-              scraperRunId: run.id,
-            },
-          });
-        } else {
-          await prisma.attachment.create({
-            data: {
-              scraperRunId: run.id,
-              filePath: ingested.scrapersRelativePath,
-            },
-          });
-        }
-        filesIngested++;
-      }
-
-      await prisma.scraperRun.update({
-        where: { id: run.id },
-        data: {
-          status: result.timed_out ? "INTERRUPTED" : result.exit_code === 0 ? "COMPLETED" : "FAILED",
-          logOutput: result.logs,
-          filesIngestedCount: filesIngested,
-          finishedAt: new Date(),
-        },
-      });
+      await prisma.scraperRun.update({ where: { id: run.id }, data: { containerId: container_id } });
     } catch (e) {
       await prisma.scraperRun.update({
         where: { id: run.id },
@@ -189,6 +176,140 @@ export default async function ScraperDetailPage({
 
     revalidatePath(`/scrapers/${id}`);
     redirect(`/scrapers/${id}`);
+  }
+
+  // Polled by ScraperRunLive (client component) every few seconds while a
+  // run is RUNNING/AWAITING_INPUT. Finalizes (ingests new_files, writes
+  // the terminal status) the moment ai-service reports the container has
+  // exited — the same logic runScraper used to do synchronously itself
+  // before a run could pause on AWAITING_INPUT.
+  async function pollScraperRunStatus(runId: string): Promise<ScraperRunPollResult> {
+    "use server";
+    const session = await auth();
+    if (!session?.user) redirect("/login");
+
+    const run = await prisma.scraperRun.findFirst({
+      where: { id: runId, scraperDefinition: { userId: session.user.id } },
+      include: { scraperDefinition: true },
+    });
+    if (!run) redirect("/scrapers");
+
+    if (run.status !== "RUNNING" && run.status !== "AWAITING_INPUT") {
+      return {
+        status: run.status,
+        logOutput: run.logOutput,
+        filesIngestedCount: run.filesIngestedCount,
+        pendingPrompt: run.pendingPrompt,
+      };
+    }
+    if (!run.containerId) {
+      // executeScraper never got far enough to record a container id —
+      // runScraper's own catch block already marked this FAILED.
+      return {
+        status: run.status,
+        logOutput: run.logOutput,
+        filesIngestedCount: run.filesIngestedCount,
+        pendingPrompt: run.pendingPrompt,
+      };
+    }
+
+    const planJson = run.planJson as { watch_signals?: string[] } | null;
+    const watchSignals = planJson?.watch_signals ?? [];
+
+    let result;
+    try {
+      result = await pollScraperRun({
+        containerId: run.containerId,
+        scraperDirRelativePath: run.scraperDefinition.scriptPath,
+        watchSignals,
+        timeoutSeconds: SCRAPER_TIMEOUT_SECONDS,
+        startedAt: run.startedAt.getTime() / 1000,
+      });
+    } catch (e) {
+      const logOutput = e instanceof AiServiceError ? JSON.stringify(e.detail) : String(e);
+      await prisma.scraperRun.update({
+        where: { id: run.id },
+        data: { status: "FAILED", logOutput, finishedAt: new Date(), containerId: null, pendingPrompt: null },
+      });
+      revalidatePath(`/scrapers/${id}`);
+      return { status: "FAILED", logOutput, filesIngestedCount: run.filesIngestedCount, pendingPrompt: null };
+    }
+
+    if (result.state === "running") {
+      await prisma.scraperRun.update({
+        where: { id: run.id },
+        data: { status: "RUNNING", pendingPrompt: null, logOutput: result.logs },
+      });
+      return { status: "RUNNING", logOutput: result.logs, filesIngestedCount: run.filesIngestedCount, pendingPrompt: null };
+    }
+
+    if (result.state === "awaiting_input") {
+      await prisma.scraperRun.update({
+        where: { id: run.id },
+        data: { status: "AWAITING_INPUT", pendingPrompt: result.pending_prompt, logOutput: result.logs },
+      });
+      return {
+        status: "AWAITING_INPUT",
+        logOutput: result.logs,
+        filesIngestedCount: run.filesIngestedCount,
+        pendingPrompt: result.pending_prompt,
+      };
+    }
+
+    // Exited — same ingestion logic runScraper used to run synchronously.
+    let filesIngested = 0;
+    for (const filePath of result.new_files) {
+      const ingested = await ingestScraperOutputFile(run.scraperDefinition.scriptPath, filePath, run.id);
+      if (ingested.kind === "dataset") {
+        await prisma.uploadedFile.create({
+          data: {
+            userId: session.user.id,
+            filePath: ingested.storageRelativePath,
+            originalFilename: ingested.originalFilename,
+            sourceType: "SCRAPER",
+            scraperRunId: run.id,
+          },
+        });
+      } else {
+        await prisma.attachment.create({
+          data: { scraperRunId: run.id, filePath: ingested.scrapersRelativePath },
+        });
+      }
+      filesIngested++;
+    }
+
+    const finalStatus = result.timed_out ? "INTERRUPTED" : result.exit_code === 0 ? "COMPLETED" : "FAILED";
+    await prisma.scraperRun.update({
+      where: { id: run.id },
+      data: {
+        status: finalStatus,
+        logOutput: result.logs,
+        filesIngestedCount: filesIngested,
+        finishedAt: new Date(),
+        containerId: null,
+        pendingPrompt: null,
+      },
+    });
+    revalidatePath(`/scrapers/${id}`);
+    return { status: finalStatus, logOutput: result.logs, filesIngestedCount: filesIngested, pendingPrompt: null };
+  }
+
+  // Relays a human-submitted value (e.g. a 2FA code) into the still-
+  // running container's stdin. Optimistically flips status back to
+  // RUNNING — the next poll confirms it for real (or re-shows a prompt if
+  // the scraper asks again, e.g. a wrong code).
+  async function submitScraperRunInput(runId: string, text: string) {
+    "use server";
+    const session = await auth();
+    if (!session?.user) redirect("/login");
+
+    const run = await prisma.scraperRun.findFirst({
+      where: { id: runId, scraperDefinition: { userId: session.user.id } },
+    });
+    if (!run || !run.containerId || run.status !== "AWAITING_INPUT") return;
+
+    await submitScraperInput({ containerId: run.containerId, text });
+    await prisma.scraperRun.update({ where: { id: run.id }, data: { status: "RUNNING", pendingPrompt: null } });
   }
 
   async function deleteScraper(formData: FormData) {
@@ -370,33 +491,20 @@ export default async function ScraperDetailPage({
         <h2 className="text-lg font-medium">Run history</h2>
         {def.runs.length === 0 && <p className="text-muted-foreground text-sm">No runs yet.</p>}
         {def.runs.map((run) => (
-          <Card key={run.id}>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-base">
-                <Badge
-                  variant={
-                    run.status === "COMPLETED" ? "default" : run.status === "RUNNING" ? "secondary" : "destructive"
-                  }
-                >
-                  {run.status.toLowerCase()}
-                </Badge>
-                <span className="text-muted-foreground text-xs font-normal">
-                  {run.startedAt.toLocaleString()}
-                  {run.finishedAt && ` – ${run.finishedAt.toLocaleString()}`}
-                </span>
-              </CardTitle>
-              <CardDescription>
-                {run.filesIngestedCount} file{run.filesIngestedCount === 1 ? "" : "s"} ingested
-              </CardDescription>
-            </CardHeader>
-            {run.logOutput && (
-              <CardContent>
-                <pre className="max-h-40 overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap">
-                  {run.logOutput}
-                </pre>
-              </CardContent>
-            )}
-          </Card>
+          <ScraperRunLive
+            key={run.id}
+            run={{
+              id: run.id,
+              status: run.status,
+              startedAt: run.startedAt.toISOString(),
+              finishedAt: run.finishedAt?.toISOString() ?? null,
+              logOutput: run.logOutput,
+              filesIngestedCount: run.filesIngestedCount,
+              pendingPrompt: run.pendingPrompt,
+            }}
+            pollAction={pollScraperRunStatus}
+            submitInputAction={submitScraperRunInput}
+          />
         ))}
       </div>
 

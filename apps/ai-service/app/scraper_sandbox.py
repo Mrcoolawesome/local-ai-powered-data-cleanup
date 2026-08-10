@@ -20,24 +20,42 @@ never as additional Docker flags), non-root, resource-limited, no secrets
 in the LLM's own context — the credential files are mounted directly by
 the orchestrator, never read into the plan or shown to the model.
 
-v1 scope note: this runs the scraper to completion (or timeout) and
-inspects the FULL captured output afterward for watch_signal matches,
-rather than streaming stdout in real time to abort early on a rate-limit
-signal. Real-time monitoring is a reasonable future improvement, not
-implemented here — documented as a deliberate v1 simplification, not an
-oversight.
+Real-time execution model: a run is started (start_scraper), then polled
+(poll_scraper) until it reports "exited" — FastAPI never blocks a single
+request for a whole scraper run. This isn't just responsiveness: it's
+what makes AWAITING_INPUT possible at all. Found running a real scraper
+against HouseCall Pro (docs/03-ingestion-and-scrapers.md): a site's own
+SMS/device-verification screen can't be satisfied by anything the
+orchestrator or a synthetic fixture can produce — only a human with a
+phone can. A scraper that hits such a screen prints a single-line marker
+(AWAITING_INPUT_MARKER below) to stdout and then blocks reading a line
+from stdin (Node's `readline`, same mechanism its own interactive-login
+prompt already used for a visible browser window — this just also allows
+it when headless). poll_scraper recognizes that marker as the container's
+current state; send_scraper_input relays a human-submitted value into the
+still-running container's stdin via a raw attach socket, proven for real
+against Node's readline before wiring this up (docs/03). None of this is
+platform-specific — any scraper that adopts the same marker convention
+gets the same pause/resume behavior for free.
 """
 import os
 import time
 
 import docker
-from docker.errors import ImageNotFound
+from docker.errors import ImageNotFound, NotFound
 
 from app.config import config
 
 SCRAPER_IMAGE_PYTHON = "data-cleanup-scraper-python:latest"
 SCRAPER_IMAGE_NODE = "data-cleanup-scraper-node:latest"
 SCRAPER_DOCKERFILE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "scraper-sandbox")
+
+# A scraper prints this prefix on its own stdout line, immediately followed
+# by whatever it needs from a human (e.g. "A verification code was sent to
+# (XXX) XXX-1234."), then blocks reading one line from stdin. Documented in
+# docs/03-ingestion-and-scrapers.md as the general convention any scraper
+# can opt into — not HouseCallPro-specific.
+AWAITING_INPUT_MARKER = "AWAITING_INPUT::"
 
 
 class ScraperSandboxError(Exception):
@@ -58,17 +76,23 @@ def _ensure_image(client: docker.DockerClient, runtime: str) -> str:
     return image
 
 
-def run_scraper(
+def _get_container(client: docker.DockerClient, container_id: str):
+    try:
+        return client.containers.get(container_id)
+    except NotFound as e:
+        raise ScraperSandboxError(f"No such running scraper container: {container_id}") from e
+
+
+def start_scraper(
     scraper_dir_relative_path: str,
     runtime: str,
     setup_commands: list[str],
     run_command: str,
-    watch_signals: list[str],
-    timeout_seconds: int = 300,
 ) -> dict:
-    """Runs setup_commands then run_command inside the scraper's own
-    directory, network-enabled, read-write. Returns
-    {exit_code, logs, matched_signals, timed_out}.
+    """Launches setup_commands then run_command inside the scraper's own
+    directory, network-enabled, read-write, and returns immediately with
+    {container_id} — does not wait for it to finish. Call poll_scraper
+    with the returned id to find out what happened.
     """
     if not config.host_scrapers_path:
         raise ScraperSandboxError(
@@ -112,6 +136,13 @@ def run_scraper(
         image,
         command=["sh", "-c", full_script],
         detach=True,
+        # Keeps stdin open (and unbuffered, non-tty) for the run's whole
+        # life so send_scraper_input can write to it later, in a
+        # completely separate request — without this a scraper blocked on
+        # readline would just see EOF immediately instead of actually
+        # waiting for a human's answer.
+        stdin_open=True,
+        tty=False,
         working_dir="/work",
         cpu_quota=100000,  # 1.0 CPU (cpu_period defaults to 100000)
         mem_limit="1g",  # scrapers (esp. Playwright/browser automation) need more headroom than the cleaning sandbox
@@ -130,29 +161,85 @@ def run_scraper(
         volumes={host_scraper_dir: {"bind": "/work", "mode": "rw"}},
         remove=False,
     )
+    return {"container_id": container.id}
 
-    timed_out = False
-    try:
-        container.wait(timeout=timeout_seconds)
-    except Exception:
-        timed_out = True
-        container.kill()
-    # container.attrs is a snapshot from when the container object was
-    # created (i.e. just as it started) — docker-py never refreshes it on
-    # its own, so reading ExitCode without reload() first always reports
-    # the pre-run placeholder (0), regardless of how the run actually
-    # ended. Confirmed for real against the Docker API: every run was
-    # silently recorded as ExitCode 0 no matter what actually happened
-    # inside the container, which meant every scraper run in the UI showed
-    # status COMPLETED even on a crash.
+
+def poll_scraper(
+    container_id: str,
+    watch_signals: list[str],
+    timeout_seconds: int,
+    started_at: float,
+) -> dict:
+    """Checks a container started by start_scraper. Returns one of:
+      {"state": "running", "logs": ...}
+      {"state": "awaiting_input", "pending_prompt": ..., "logs": ...}
+      {"state": "exited", "exit_code": ..., "logs": ..., "matched_signals": ..., "timed_out": ...}
+    A container still genuinely executing past timeout_seconds is killed
+    here (same protection run_scraper used to provide) — but a container
+    blocked in AWAITING_INPUT is exempt, since it's correctly idle
+    waiting on a human, not stuck.
+    """
+    client = _client()
+    container = _get_container(client, container_id)
     container.reload()
+    status = container.attrs.get("State", {}).get("Status")
     logs = container.logs().decode(errors="replace")
+
+    if status == "running":
+        lines = [line for line in logs.splitlines() if line.strip()]
+        last_line = lines[-1] if lines else ""
+        if last_line.startswith(AWAITING_INPUT_MARKER):
+            return {
+                "state": "awaiting_input",
+                "pending_prompt": last_line[len(AWAITING_INPUT_MARKER):].strip(),
+                "logs": logs,
+            }
+
+        if time.time() - started_at > timeout_seconds:
+            container.kill()
+            container.reload()
+            logs = container.logs().decode(errors="replace")
+            exit_code = container.attrs.get("State", {}).get("ExitCode", -1)
+            container.remove(force=True)
+            return {
+                "state": "exited",
+                "exit_code": exit_code,
+                "logs": logs,
+                "matched_signals": [s for s in watch_signals if s in logs],
+                "timed_out": True,
+            }
+
+        return {"state": "running", "logs": logs}
+
+    # Any terminal Docker status ("exited", but also e.g. "dead") — same
+    # container.reload()-before-ExitCode requirement as above; already
+    # satisfied since this function always reloads before reading status.
     exit_code = container.attrs.get("State", {}).get("ExitCode", -1)
     container.remove(force=True)
+    return {
+        "state": "exited",
+        "exit_code": exit_code,
+        "logs": logs,
+        "matched_signals": [s for s in watch_signals if s in logs],
+        "timed_out": False,
+    }
 
-    matched_signals = [s for s in watch_signals if s in logs]
 
-    return {"exit_code": exit_code, "logs": logs, "matched_signals": matched_signals, "timed_out": timed_out}
+def send_scraper_input(container_id: str, text: str) -> None:
+    """Writes text + a newline into a still-running container's stdin —
+    the other half of the AWAITING_INPUT marker convention poll_scraper
+    detects. Requesting stdin+stdout+stderr together in attach_socket's
+    params is required, not cosmetic: proved for real that requesting
+    stdin alone silently delivered nothing to a blocked `readline` call,
+    while requesting all three streams worked (docs/03).
+    """
+    client = _client()
+    container = _get_container(client, container_id)
+    sock = container.attach_socket(params={"stdin": 1, "stdout": 1, "stderr": 1, "stream": 1})
+    try:
+        sock._sock.sendall((text + "\n").encode())
+    finally:
+        sock.close()
 
 
 def list_files_modified_since(scraper_dir_relative_path: str, since_epoch: float) -> list[str]:

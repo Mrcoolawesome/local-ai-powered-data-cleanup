@@ -242,6 +242,13 @@ model ScraperDefinition {
 
 enum ScraperRunStatus {
   RUNNING
+  // The sandboxed process printed the generic "waiting on stdin" marker
+  // (docs/03-ingestion-and-scrapers.md) and is blocked mid-run — e.g. a
+  // site's 2FA/verification-code screen a scraper can't get past on its
+  // own. pendingPrompt holds the text to show the human; submitting a
+  // value relays it into the still-running container's stdin and the run
+  // goes back to RUNNING.
+  AWAITING_INPUT
   COMPLETED
   INTERRUPTED
   FAILED
@@ -262,6 +269,15 @@ model ScraperRun {
   filesIngestedCount  Int               @default(0)
   startedAt           DateTime          @default(now())
   finishedAt          DateTime?
+  // Set as soon as execution starts, cleared once the run reaches a
+  // terminal status. Lets a later poll/input request find the actual
+  // still-running Docker container again without keeping any in-memory
+  // state in ai-service itself (which would break across restarts/
+  // multiple ai-service instances).
+  containerId         String?
+  // Only non-null while status is AWAITING_INPUT — the prompt text parsed
+  // from the scraper's own stdout marker line, shown to the human.
+  pendingPrompt       String?           @db.Text
 
   uploadedFiles        UploadedFile[]
   attachments          Attachment[]
