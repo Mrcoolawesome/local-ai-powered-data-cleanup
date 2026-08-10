@@ -41,5 +41,12 @@ spikes/ollama-prompting/combined_script.py
 spikes/ollama-prompting/system_prompt.txt
 spikes/ollama-prompting/fixtures/
 
+# Prisma's auto-installed agent-skill reference docs: .claude/skills/ are
+# symlinks INTO .agents/skills/ (the real content lives there) — keep both,
+# or .claude/skills/ ends up as dangling symlinks for anyone who clones this
+# repo. Only .windsurf/skills/ (a redundant symlink shim for a tool not in
+# use here) is safe to exclude.
+apps/web/.windsurf/
+
 .DS_Store
 *.log

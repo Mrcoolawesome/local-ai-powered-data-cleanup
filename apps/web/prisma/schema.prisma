@@ -1,0 +1,35 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// Phase 1 scope per docs/02-data-model.md: just enough to log in and
+// configure the Ollama endpoint. Everything else (TargetSchema, Dataset,
+// ScraperDefinition, ...) lands in later phases as those features are built.
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String?
+  passwordHash String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// Singleton row (fixed id) rather than per-user: the Ollama endpoint is one
+// physical server shared by every user of this internal tool, not a
+// per-user preference — see docs/05-llm-prompting.md.
+model Settings {
+  id            String   @id @default("singleton")
+  ollamaBaseUrl String   @default("http://devin-server:11434")
+  ollamaModel   String   @default("gemma4-e4b-262k:latest")
+  updatedAt     DateTime @updatedAt
+}
