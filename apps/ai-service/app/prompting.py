@@ -194,6 +194,18 @@ for a script that was never `chmod +x`'d.
   breakdown that isn't actually there. This lets a human choose a full export (every
   operation) or just specific ones, rather than being forced into whichever single
   command you'd otherwise have to pick.
+  ORDER MATTERS when multiple operations are separate scripts/commands sharing one
+  login session: found for real that a README can describe one specific operation as
+  the one that actually performs login (e.g. "First run does an interactive login...
+  persists the session; later runs restore it") while the others only reuse whatever
+  session already exists and do no login of their own. If the README describes that
+  kind of relationship, list the session-establishing operation FIRST in
+  available_operations, before any operation that merely restores/reuses it — a human
+  can still deselect it, but a full run (everything checked, the default) must not
+  attempt a session-dependent operation before the one that creates the session, or it
+  fails with an authentication error despite the credentials being entirely correct.
+  If the README gives no indication any operations depend on another this way, order
+  doesn't matter — list them in whatever order the README does.
 - expected_output_pattern: string — the file/directory naming pattern the README says
   output lands at (e.g. "output/{COMPANY_NAME}/{job_number}/{filename}").
 - watch_signals: array of strings — literal stdout substrings the README says indicate
