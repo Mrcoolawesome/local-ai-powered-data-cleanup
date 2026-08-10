@@ -9,6 +9,14 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   // neither applies to a Credentials-only internal tool, and NextAuth's
   // Credentials provider doesn't support adapter-backed sign-in anyway.
   session: { strategy: "jwt" },
+  // Auth.js refuses requests whose Host header it doesn't recognize
+  // (UntrustedHost) unless told to trust it — a real check hit while
+  // testing this behind Docker Compose's plain port mapping, not a
+  // hypothetical. Appropriate here: this is entirely self-hosted behind
+  // infrastructure the deploying user controls (docs/11-deployment.md),
+  // not a multi-tenant platform where a spoofed Host header could route
+  // to someone else's deployment.
+  trustHost: true,
   pages: {
     signIn: "/login",
   },

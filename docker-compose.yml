@@ -1,0 +1,79 @@
+# Whole-app deployment per docs/11-deployment.md — start/stop everything
+# as one unit: `docker compose up -d` / `docker compose down`. Ollama is
+# deliberately NOT a service here — it's already running separately on
+# devin-server; see the ai-service section below for how that's reached.
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: data_cleanup
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Runs `prisma migrate deploy` once and exits — a standard Compose
+  # pattern for applying migrations before the app starts, kept separate
+  # from `web` so the runtime image doesn't need to carry the full Prisma
+  # CLI + devDependencies (see apps/web/Dockerfile's `builder` stage).
+  migrator:
+    build:
+      context: ./apps/web
+      target: builder
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/data_cleanup
+    command: ["pnpm", "exec", "prisma", "migrate", "deploy"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ./apps/web
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/data_cleanup
+      AUTH_SECRET: ${AUTH_SECRET}
+      AI_SERVICE_URL: http://ai-service:8000
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./storage:/app/storage
+    depends_on:
+      migrator:
+        condition: service_completed_successfully
+
+  ai-service:
+    build:
+      context: ./apps/ai-service
+    restart: unless-stopped
+    environment:
+      AI_SERVICE_DEFAULT_OLLAMA_BASE_URL: ${DEFAULT_OLLAMA_BASE_URL:-http://devin-server:11434}
+    # devin-server is a Tailscale MagicDNS hostname (docs/11-deployment.md)
+    # — Docker's embedded DNS can't reliably resolve it from a container's
+    # network namespace (confirmed: intermittently fails even pointed at
+    # Tailscale's own resolver), but IS able to route to the IP directly,
+    # since traffic goes out through the host, which is itself on the
+    # tailnet. Static-map the hostname to that IP rather than depend on
+    # DNS forwarding that proved unreliable. If this IP ever changes,
+    # either update it here, or just set the Ollama endpoint to the new
+    # IP directly in the app's Settings UI — no redeploy needed either way.
+    extra_hosts:
+      - "devin-server:${DEVIN_SERVER_TAILSCALE_IP}"
+    volumes:
+      - ./storage:/app/storage
+      # See docs/11-deployment.md's "sandbox-orchestration" section — this
+      # gets added in Phase 3 when ai-service actually needs to launch
+      # sandbox containers as siblings. Not needed yet, so not mounted yet.
+
+volumes:
+  postgres-data:
+  # ./storage is a bind mount (not a named volume) per docs/11-deployment.md
+  # — uploads/attachments need to survive `docker compose down -v` and be
+  # directly inspectable/backuppable from the host.

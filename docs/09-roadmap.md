@@ -13,11 +13,13 @@ Phased so each phase produces something runnable/demoable, and so the highest-ri
 
 ## Phase 1 — Core Scaffolding
 
-- Next.js app: Tailwind + shadcn/ui installed, base layout.
-- NextAuth.js authentication.
-- Prisma schema v1 from [02-data-model.md](./02-data-model.md) (start with `User`, `Settings` — including the UI-editable Ollama endpoint).
-- FastAPI service skeleton with an Ollama client wrapper reading the configurable endpoint.
-- **Docker Compose stack** (postgres + web + ai-service) per [11-deployment.md](./11-deployment.md) — this is the deployment model going forward, not just local dev convenience: the whole app starts/stops as one unit via `docker compose up`/`down`.
+**Status: done, built and verified for real** — not just scaffolded, actually run: `docker compose up -d` from a clean slate, migrations applied automatically, a real user logged in through actual HTTP requests (CSRF → credentials → session cookie → authenticated page), and `ai-service` confirmed reaching the real Ollama server from inside its own container. See [11-deployment.md](./11-deployment.md)'s "Phase 1 status" for the four real issues found and fixed along the way (Tailscale DNS resolution, missing initial migration, missing OpenSSL, Auth.js host trust).
+
+- [x] Next.js app: Tailwind + shadcn/ui installed, base layout.
+- [x] NextAuth.js (Auth.js v5) authentication — Credentials provider, JWT sessions, no adapter needed.
+- [x] Prisma schema v1 from [02-data-model.md](./02-data-model.md) (`User`, `Settings` — including the UI-editable Ollama endpoint), with a real initial migration committed.
+- [x] FastAPI service skeleton with an Ollama client wrapper reading the configurable endpoint — `/health`, `/ollama/health`, `/ollama/chat` all exercised against the live model server.
+- [x] **Docker Compose stack** (postgres + migrator + web + ai-service) per [11-deployment.md](./11-deployment.md) — this is the deployment model going forward, not just local dev convenience: the whole app starts/stops as one unit via `docker compose up`/`down`.
 
 ## Phase 2 — File Ingestion & Rules Config
 

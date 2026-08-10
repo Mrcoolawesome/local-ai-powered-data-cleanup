@@ -7,13 +7,15 @@
 ```
 docker-compose.yml
   ├─ postgres        — official postgres image, named volume for data
+  ├─ migrator         — runs `prisma migrate deploy` once, exits (see below)
   ├─ web             — Next.js app (Prisma client lives here)
   ├─ ai-service       — FastAPI orchestration service
   └─ (zoom-bot        — Phase 6, not part of Phase 1's compose file yet;
        added once the presentation-route + WebSocket pieces exist to share)
 ```
 
-- **`postgres`** — standard image, a named volume (`postgres-data`) for durability across `docker compose down`/`up` cycles. Not exposed outside the Compose network by default — only `web` needs to reach it.
+- **`postgres`** — standard image, a named volume (`postgres-data`) for durability across `docker compose down`/`up` cycles. Not exposed outside the Compose network by default — only `web`/`migrator` need to reach it.
+- **`migrator`** — built from the same Dockerfile as `web` but stopped at its `builder` stage (full `node_modules` + Prisma CLI + the `prisma/` folder), so it can run `prisma migrate deploy` before `web` starts. `web`'s own image is the trimmed Next.js `output: "standalone"` runtime and deliberately does **not** carry the Prisma CLI or migration files — keeping migrations in a separate one-shot service avoids bloating the thing that's actually running 24/7. `web` waits on `migrator` finishing successfully (`depends_on: condition: service_completed_successfully`).
 - **`web`** — the Next.js app. Owns the Prisma client and all Postgres access (per [01-architecture.md](./01-architecture.md)'s "one ORM boundary" decision). Exposed on a host port for browser access.
 - **`ai-service`** — the FastAPI service. Talks to `devin-server:11434` (configurable, see below) for Ollama, and to `web`'s internal API for anything it needs from Postgres (it never queries Postgres directly). Not exposed to the host — only `web` calls it, over the Compose-internal network.
 
@@ -43,8 +45,13 @@ ai-service:
 
 ## Configuration
 
-- `.env` at the repo root (gitignored, `.env.example` committed) holds Compose-level secrets: `POSTGRES_PASSWORD`, `NEXTAUTH_SECRET`, and a *default* `OLLAMA_BASE_URL` that seeds `Settings.ollamaBaseUrl` on first run — the UI-editable setting ([05-llm-prompting.md](./05-llm-prompting.md)) takes over after that, so this default only matters for a fresh install.
+- `.env` at the repo root (gitignored, `.env.example` committed) holds Compose-level secrets: `POSTGRES_PASSWORD`, `AUTH_SECRET`, and a *default* `DEFAULT_OLLAMA_BASE_URL` that seeds `Settings.ollamaBaseUrl` on first run — the UI-editable setting ([05-llm-prompting.md](./05-llm-prompting.md)) takes over after that, so this default only matters for a fresh install.
 - Everything else (target schemas, cleaning rules, registered scrapers) is application data in Postgres, not Compose/environment configuration — it doesn't require a restart to change.
+- There's no public signup flow (internal, admin-provisioned accounts). Create/update the first login after `docker compose up -d` with:
+  ```bash
+  docker compose run --rm -e SEED_USER_EMAIL=you@example.com -e SEED_USER_PASSWORD=... migrator pnpm exec prisma db seed
+  ```
+  Deliberately not run automatically on every boot — `seed.ts` upserts by email, so an unattended rerun on every restart would silently overwrite a password changed through some future in-app flow with whatever's still sitting in `.env`.
 
 ## Starting and stopping
 
@@ -53,3 +60,12 @@ docker compose up -d      # start (or restart) the whole stack
 docker compose down       # stop everything, keep data (named volumes + bind-mounted storage persist)
 docker compose down -v    # stop and also wipe Postgres's named volume — deliberately destructive, not the default
 ```
+
+## Phase 1 status — built and run for real, not just written
+
+The stack above isn't a paper design — it was actually built and brought up end to end (`docker compose build && docker compose up -d`) against a fresh database, and the full login flow was exercised through real HTTP requests (CSRF token → credentials sign-in → session cookie → authenticated page load showing the correct `Settings` values). Four real issues surfaced along the way, none hypothetical:
+
+1. **`devin-server` doesn't resolve inside a container.** It's a Tailscale MagicDNS hostname (`devin-server.tail41e05b.ts.net`), not a plain LAN name. Docker's embedded per-container DNS resolver can't reach it — confirmed both the plain default resolver and explicitly pointing the container at Tailscale's own resolver (`100.100.100.100`) fail or are flaky. What **does** work reliably (tested 3/3): the container reaching the Tailscale IP directly, since outbound traffic routes through the host, which is itself on the tailnet. Fix: `ai-service` gets a static `extra_hosts: ["devin-server:${DEVIN_SERVER_TAILSCALE_IP}"]` mapping instead of depending on DNS forwarding. If that IP ever changes, either update `.env` and restart, or just point `Settings.ollamaBaseUrl` at the new IP directly in the UI — no redeploy required either way, which is exactly the portability the UI-editable-endpoint decision was for.
+2. **No migration existed yet.** `prisma generate` (build-time) and `prisma migrate deploy` (the `migrator` service) are different things — `generate` only builds the client from whatever schema is present, `migrate deploy` only *applies* migration files that already exist. The initial migration had to be created once against the real containerized Postgres (`docker compose run --rm --volume "$(pwd)/apps/web/prisma:/app/prisma" migrator pnpm exec prisma migrate dev --name init`, bind-mounting so the generated SQL lands back on the host to commit) before `migrate deploy` had anything to apply.
+3. **`node:22-slim` has no OpenSSL**, which Prisma's engine wants to detect libssl against — silently degrades to a guessed version rather than failing outright, which is worse than an error. Fixed by installing `openssl` in the Dockerfile's `base` stage.
+4. **Auth.js refused every request with `UntrustedHost`.** A real security check (prevents Host-header spoofing from routing to the wrong deployment), appropriate to disable here (`trustHost: true` in `lib/auth.ts`) *because* this is self-hosted behind infrastructure the deploying user fully controls — not a multi-tenant platform where that check matters.
