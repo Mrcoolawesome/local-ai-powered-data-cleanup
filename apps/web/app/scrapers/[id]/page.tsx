@@ -1,0 +1,289 @@
+import { redirect, notFound } from "next/navigation";
+import Link from "next/link";
+import { revalidatePath } from "next/cache";
+import { auth } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
+import { planScraperCommand, executeScraper, AiServiceError } from "@/lib/ai-service";
+import { ingestScraperOutputFile } from "@/lib/scraper-ingest";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
+import { Separator } from "@/components/ui/separator";
+
+export default async function ScraperDetailPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ plan?: string; error?: string }>;
+}) {
+  const session = await auth();
+  if (!session?.user) redirect("/login");
+
+  const { id } = await params;
+  const { plan: showPlan, error } = await searchParams;
+
+  const def = await prisma.scraperDefinition.findFirst({
+    where: { id, userId: session.user.id },
+    include: { runs: { orderBy: { startedAt: "desc" } } },
+  });
+  if (!def) notFound();
+
+  async function markValidated() {
+    "use server";
+    const session = await auth();
+    if (!session?.user) redirect("/login");
+    await prisma.scraperDefinition.updateMany({
+      where: { id, userId: session.user.id },
+      data: { lastValidatedAt: new Date() },
+    });
+    revalidatePath(`/scrapers/${id}`);
+  }
+
+  // Runs a fresh planning call every time the plan section is shown rather
+  // than caching it — a stale plan against a scraper whose README drifted
+  // is exactly the silent-failure mode docs/03 warns about.
+  let plan: Awaited<ReturnType<typeof planScraperCommand>>["plan"] | null = null;
+  let planError: string | null = null;
+  if (showPlan) {
+    try {
+      const result = await planScraperCommand(def.readmePath);
+      plan = result.plan;
+    } catch (e) {
+      planError = e instanceof AiServiceError ? e.message : "Planning failed.";
+    }
+  }
+
+  async function runScraper(formData: FormData) {
+    "use server";
+    const session = await auth();
+    if (!session?.user) redirect("/login");
+
+    const definition = await prisma.scraperDefinition.findFirst({ where: { id, userId: session.user.id } });
+    if (!definition) redirect("/scrapers");
+
+    const confirmed = formData.get("confirm") === "on";
+    if (!confirmed) redirect(`/scrapers/${id}?plan=1&error=${encodeURIComponent("Confirmation checkbox is required to run a real scraper.")}`);
+
+    const runCommand = formData.get("runCommand") as string;
+    const setupCommands = (formData.get("setupCommands") as string)
+      .split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const watchSignals = (formData.get("watchSignals") as string)
+      .split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const planJson = JSON.parse(formData.get("planJson") as string);
+
+    const commandExecuted = [...setupCommands, runCommand].join(" && ");
+    const run = await prisma.scraperRun.create({
+      data: {
+        scraperDefinitionId: definition.id,
+        commandExecuted,
+        planJson,
+        status: "RUNNING",
+      },
+    });
+
+    try {
+      const result = await executeScraper({
+        scraperDirRelativePath: definition.scriptPath,
+        runtime: definition.runtime,
+        setupCommands,
+        runCommand,
+        watchSignals,
+      });
+
+      let filesIngested = 0;
+      for (const filePath of result.new_files) {
+        const ingested = await ingestScraperOutputFile(definition.scriptPath, filePath, run.id);
+        if (ingested.kind === "dataset") {
+          await prisma.uploadedFile.create({
+            data: {
+              userId: session.user.id,
+              filePath: ingested.storageRelativePath,
+              originalFilename: ingested.originalFilename,
+              sourceType: "SCRAPER",
+              scraperRunId: run.id,
+            },
+          });
+        } else {
+          await prisma.attachment.create({
+            data: {
+              scraperRunId: run.id,
+              filePath: ingested.scrapersRelativePath,
+            },
+          });
+        }
+        filesIngested++;
+      }
+
+      await prisma.scraperRun.update({
+        where: { id: run.id },
+        data: {
+          status: result.timed_out ? "INTERRUPTED" : result.exit_code === 0 ? "COMPLETED" : "FAILED",
+          logOutput: result.logs,
+          filesIngestedCount: filesIngested,
+          finishedAt: new Date(),
+        },
+      });
+    } catch (e) {
+      await prisma.scraperRun.update({
+        where: { id: run.id },
+        data: {
+          status: "FAILED",
+          logOutput: e instanceof AiServiceError ? JSON.stringify(e.detail) : String(e),
+          finishedAt: new Date(),
+        },
+      });
+    }
+
+    revalidatePath(`/scrapers/${id}`);
+    redirect(`/scrapers/${id}`);
+  }
+
+  return (
+    <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 p-6">
+      <div>
+        <Link href="/scrapers" className="text-muted-foreground text-sm hover:text-foreground">
+          &larr; Scrapers
+        </Link>
+        <h1 className="flex items-center gap-2 text-2xl font-semibold">
+          {def.platformName}
+          <Badge variant="outline">{def.runtime.toLowerCase()}</Badge>
+        </h1>
+        <p className="text-muted-foreground text-sm">{def.scriptPath}</p>
+      </div>
+
+      <Separator />
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Credential validation</CardTitle>
+          <CardDescription>
+            A human must confirm the saved session/credentials work (2FA, interactive login) before the agent runs
+            this unattended — the agent never performs interactive login itself.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex items-center gap-3">
+          {def.lastValidatedAt ? (
+            <Badge variant="default">Validated {def.lastValidatedAt.toLocaleString()}</Badge>
+          ) : (
+            <Badge variant="destructive">Not yet validated</Badge>
+          )}
+          <form action={markValidated}>
+            <Button type="submit" variant="outline">
+              Mark validated now
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Plan a run</CardTitle>
+          <CardDescription>
+            Reads the README and produces a command plan — review it before running anything against a real
+            platform with live credentials.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          {!showPlan && (
+            <Link href={`/scrapers/${id}?plan=1`}>
+              <Button type="button" variant="outline">
+                Get plan from README
+              </Button>
+            </Link>
+          )}
+
+          {error && <p className="text-destructive text-sm">{decodeURIComponent(error)}</p>}
+          {planError && <p className="text-destructive text-sm">{planError}</p>}
+
+          {plan && (
+            <>
+              <div className="flex flex-col gap-2 text-sm">
+                <div className="flex items-center gap-2">
+                  <span className="font-medium">Confidence:</span>
+                  <Badge variant={plan.confidence === "high" ? "default" : plan.confidence === "medium" ? "secondary" : "destructive"}>
+                    {plan.confidence}
+                  </Badge>
+                </div>
+                {plan.concerns && <p className="text-muted-foreground">{plan.concerns}</p>}
+                <div>
+                  <span className="font-medium">Setup:</span>
+                  <pre className="mt-1 overflow-x-auto rounded-md bg-muted p-2 text-xs">
+                    {plan.setup_commands.join("\n") || "(none)"}
+                  </pre>
+                </div>
+                <div>
+                  <span className="font-medium">Run:</span>
+                  <pre className="mt-1 overflow-x-auto rounded-md bg-muted p-2 text-xs">{plan.run_command}</pre>
+                </div>
+                <div>
+                  <span className="font-medium">Watch signals:</span>
+                  <pre className="mt-1 overflow-x-auto rounded-md bg-muted p-2 text-xs">
+                    {plan.watch_signals.join("\n") || "(none)"}
+                  </pre>
+                </div>
+              </div>
+
+              <form action={runScraper} className="flex flex-col gap-3 rounded-md border border-destructive/30 p-3">
+                <input type="hidden" name="setupCommands" value={plan.setup_commands.join("\n")} />
+                <input type="hidden" name="runCommand" value={plan.run_command} />
+                <input type="hidden" name="watchSignals" value={plan.watch_signals.join("\n")} />
+                <input type="hidden" name="planJson" value={JSON.stringify(plan)} />
+                <div className="flex items-start gap-2">
+                  <Checkbox id="confirm" name="confirm" required />
+                  <Label htmlFor="confirm" className="text-sm font-normal">
+                    I understand this will run the above commands in a sandboxed container against the real target
+                    platform using this scraper&apos;s saved credentials, and I have reviewed the plan above.
+                  </Label>
+                </div>
+                <Button type="submit" variant="destructive" className="w-fit">
+                  Run scraper now
+                </Button>
+              </form>
+            </>
+          )}
+        </CardContent>
+      </Card>
+
+      <div className="flex flex-col gap-3">
+        <h2 className="text-lg font-medium">Run history</h2>
+        {def.runs.length === 0 && <p className="text-muted-foreground text-sm">No runs yet.</p>}
+        {def.runs.map((run) => (
+          <Card key={run.id}>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Badge
+                  variant={
+                    run.status === "COMPLETED" ? "default" : run.status === "RUNNING" ? "secondary" : "destructive"
+                  }
+                >
+                  {run.status.toLowerCase()}
+                </Badge>
+                <span className="text-muted-foreground text-xs font-normal">
+                  {run.startedAt.toLocaleString()}
+                  {run.finishedAt && ` – ${run.finishedAt.toLocaleString()}`}
+                </span>
+              </CardTitle>
+              <CardDescription>
+                {run.filesIngestedCount} file{run.filesIngestedCount === 1 ? "" : "s"} ingested
+              </CardDescription>
+            </CardHeader>
+            {run.logOutput && (
+              <CardContent>
+                <pre className="max-h-40 overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap">
+                  {run.logOutput}
+                </pre>
+              </CardContent>
+            )}
+          </Card>
+        ))}
+      </div>
+    </main>
+  );
+}

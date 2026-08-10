@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-export function AppNav({ current }: { current: "home" | "schemas" | "upload" }) {
+export function AppNav({ current }: { current: "home" | "schemas" | "upload" | "scrapers" }) {
   const linkClass = (key: string) =>
     key === current
       ? "text-foreground font-medium"
@@ -16,6 +16,9 @@ export function AppNav({ current }: { current: "home" | "schemas" | "upload" }) 
       </Link>
       <Link href="/upload" className={linkClass("upload")}>
         Upload
+      </Link>
+      <Link href="/scrapers" className={linkClass("scrapers")}>
+        Scrapers
       </Link>
     </nav>
   );

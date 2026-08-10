@@ -53,13 +53,13 @@ Phased so each phase produces something runnable/demoable, and so the highest-ri
 - [x] On-demand full-audit trigger — recomputes the report directly from `TargetSchema` against the dataset's current file, no LLM call and no sandbox execution needed, since the report is a deterministic function of (current data, schema). **Real design decision:** the report-scoring logic (`compute_report`) now lives in exactly one place (`apps/ai-service/app/report.py`) and is embedded into the sandbox harness via `inspect.getsource()` rather than duplicated — the subtle required-field-scoring bug found in Phase 3 lived in this exact logic once already, so keeping two copies in sync by hand was a real, known risk, not a hypothetical one.
 - [x] Question-answering path, answering only from aggregate stats (row/null counts, low-cardinality value counts) — never raw rows, per [05-llm-prompting.md](./05-llm-prompting.md). Verified: asked "how many rows are missing an email" against a 3-row test set, got the correct answer (1) derived purely from aggregates.
 
-## Phase 5 — Scraper Agent
+## Phase 5 — Scraper Agent — DONE (mechanics proven; real platforms not yet run)
 
-- `ScraperDefinition` registration (starting with the two House Call Pro examples already on hand).
-- README-reading command-planning agent per [05-llm-prompting.md](./05-llm-prompting.md)'s scraper-planning prompt.
-- Sandbox-execute scraper runs (credentials mounted, not exposed to the model).
-- Output-structure-aware ingestion into `UploadedFile`/`Attachment`.
-- Extend to the remaining ~5 scraper platforms once the pattern is proven on House Call Pro.
+- `ScraperDefinition` registration — done, `/scrapers` UI, tested against the real House Call Pro examples' READMEs for discovery/registration and end-to-end (browser → DB) against a safe synthetic fixture for the full plan-and-run flow.
+- README-reading command-planning agent per [05-llm-prompting.md](./05-llm-prompting.md)'s scraper-planning prompt — done, verified against both real HCP READMEs (Python/Playwright and Node variants, each correctly picked up).
+- Sandbox-execute scraper runs (credentials mounted, not exposed to the model) — done, `docker-py`-based executor, real permission bug found and root-caused during testing (`docs/06-security-sandboxing.md`).
+- Output-structure-aware ingestion into `UploadedFile`/`Attachment` — done, extension-based routing (spreadsheet → `UploadedFile`, media → `Attachment`); job/customer id extraction from Attachment paths deliberately left as a v1 gap (`docs/03-ingestion-and-scrapers.md`).
+- Extend to the remaining ~5 scraper platforms once the pattern is proven on House Call Pro — not started; deliberately not running any real scraper against live credentials without explicit user go-ahead first, independent of the mechanics being proven end-to-end.
 
 ## Phase 6 — Zoom Presentation Bot
 

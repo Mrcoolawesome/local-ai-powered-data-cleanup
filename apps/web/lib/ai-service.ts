@@ -142,3 +142,29 @@ export function planScraperCommand(readmeRelativePath: string) {
     readme_relative_path: readmeRelativePath,
   });
 }
+
+export type ScraperExecutionResult = {
+  exit_code: number;
+  logs: string;
+  matched_signals: string[];
+  timed_out: boolean;
+  new_files: string[];
+};
+
+export function executeScraper(params: {
+  scraperDirRelativePath: string;
+  runtime: "PYTHON" | "NODE";
+  setupCommands: string[];
+  runCommand: string;
+  watchSignals: string[];
+  timeoutSeconds?: number;
+}) {
+  return postJson<ScraperExecutionResult>("/scraper/execute", {
+    scraper_dir_relative_path: params.scraperDirRelativePath,
+    runtime: params.runtime,
+    setup_commands: params.setupCommands,
+    run_command: params.runCommand,
+    watch_signals: params.watchSignals,
+    timeout_seconds: params.timeoutSeconds ?? 300,
+  });
+}
