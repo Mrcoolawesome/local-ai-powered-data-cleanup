@@ -8,11 +8,21 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
+from app.audit import AuditRecomputeError, recompute_audit
 from app.config import config
 from app.ollama_client import OllamaError, chat, list_models
-from app.prompting import NoCodeBlockError, build_system_prompt, extract_code_block
+from app.prompting import (
+    NoCodeBlockError,
+    UnrecognizedIntentError,
+    build_edit_system_prompt,
+    build_intent_classification_prompt,
+    build_question_system_prompt,
+    build_system_prompt,
+    extract_code_block,
+    parse_intent,
+)
 from app.sandbox import SandboxError, run_cleaning
-from app.schema_inference import SchemaInferenceError, infer_schema
+from app.schema_inference import SchemaInferenceError, compute_summary_stats, get_current_columns, infer_schema
 
 app = FastAPI(title="data-cleanup ai-service")
 
@@ -205,3 +215,162 @@ async def execute_cleaning(req: ExecuteCleaningRequest):
         "model": model,
         **result,
     }
+
+
+# --- Chat (Phase 4, docs/04-ai-cleaning-and-audit.md) ---------------------
+
+
+class ClassifyIntentRequest(BaseModel):
+    message: str
+    base_url: str | None = None
+    model: str | None = None
+
+
+@app.post("/chat/classify-intent")
+async def classify_intent(req: ClassifyIntentRequest):
+    """A deliberately separate, minimal call from the main chat prompts —
+    this is what keeps the system from re-auditing on every turn while
+    still recognizing an explicit audit request (docs/04).
+    """
+    url = req.base_url or config.default_ollama_base_url
+    model = req.model or config.default_ollama_model
+    system_prompt = build_intent_classification_prompt()
+    try:
+        raw_response = await chat(
+            url,
+            model,
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": req.message},
+            ],
+            options={"temperature": 0.0},
+        )
+    except OllamaError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+    try:
+        intent = parse_intent(raw_response)
+    except UnrecognizedIntentError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+    return {"intent": intent, "raw_response": raw_response}
+
+
+class ChatAuditRequest(BaseModel):
+    dataset_file_relative_path: str
+    target_schema: list[TargetColumn]
+
+
+@app.post("/chat/audit")
+async def chat_audit(req: ChatAuditRequest):
+    """On-demand recompute against the dataset's CURRENT file — no LLM
+    call, no sandbox execution, just compute_report again (docs/04's
+    on-demand audit doesn't need to re-run cleaning, only re-derive the
+    report from current data).
+    """
+    try:
+        result = await run_in_threadpool(
+            recompute_audit, req.dataset_file_relative_path, [c.model_dump() for c in req.target_schema]
+        )
+    except AuditRecomputeError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    return result
+
+
+class ChatEditRequest(BaseModel):
+    message: str
+    target_schema: list[TargetColumn]
+    cleaning_rules: list[CleaningRuleInfo] = []
+    dataset_file_relative_path: str
+    output_relative_dir: str
+    base_url: str | None = None
+    model: str | None = None
+
+
+@app.post("/chat/edit")
+async def chat_edit(req: ChatEditRequest):
+    """A user-requested incremental change to already-cleaned data. Routed
+    through the identical sandbox as the initial clean — docs/04: no
+    trusted tier just because a chat turn produced the code instead of
+    the initial upload.
+    """
+    url = req.base_url or config.default_ollama_base_url
+    model = req.model or config.default_ollama_model
+    target_schema_dicts = [c.model_dump() for c in req.target_schema]
+    cleaning_rule_dicts = [r.model_dump() for r in req.cleaning_rules]
+
+    try:
+        current_columns = await run_in_threadpool(get_current_columns, req.dataset_file_relative_path)
+    except SchemaInferenceError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+    system_prompt = build_edit_system_prompt(target_schema_dicts, cleaning_rule_dicts, current_columns)
+    try:
+        raw_response = await chat(
+            url,
+            model,
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": req.message},
+            ],
+        )
+    except OllamaError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+    try:
+        code = extract_code_block(raw_response)
+    except NoCodeBlockError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+    try:
+        result = await run_in_threadpool(
+            run_cleaning,
+            code,
+            req.dataset_file_relative_path,
+            "dataset.csv",  # already-cleaned data is always CSV — see sandbox.py's _read_call_for
+            target_schema_dicts,
+            req.output_relative_dir,
+        )
+    except SandboxError as e:
+        raise HTTPException(status_code=422, detail={"error": str(e), "generated_code": code}) from e
+
+    return {"code": code, "base_url": url, "model": model, **result}
+
+
+class ChatQuestionRequest(BaseModel):
+    message: str
+    target_schema: list[TargetColumn]
+    dataset_file_relative_path: str
+    base_url: str | None = None
+    model: str | None = None
+
+
+@app.post("/chat/question")
+async def chat_question(req: ChatQuestionRequest):
+    """Conversational answer using aggregate stats only — never raw rows
+    (docs/05-llm-prompting.md). No sandbox execution; this path never
+    mutates the dataset.
+    """
+    url = req.base_url or config.default_ollama_base_url
+    model = req.model or config.default_ollama_model
+    target_schema_dicts = [c.model_dump() for c in req.target_schema]
+
+    try:
+        summary_stats = await run_in_threadpool(compute_summary_stats, req.dataset_file_relative_path)
+    except SchemaInferenceError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+    system_prompt = build_question_system_prompt(target_schema_dicts, summary_stats)
+    try:
+        reply = await chat(
+            url,
+            model,
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": req.message},
+            ],
+        )
+    except OllamaError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+    return {"reply": reply, "base_url": url, "model": model, "summary_stats": summary_stats}

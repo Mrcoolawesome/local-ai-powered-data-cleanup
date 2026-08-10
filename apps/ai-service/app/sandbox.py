@@ -11,6 +11,7 @@ container. config.host_storage_path is how ai-service translates "a file I
 can see at {storage_root}/x" into "the path the daemon needs for a sibling
 container's mount" — see config.py.
 """
+import inspect
 import json
 import os
 import shutil
@@ -20,6 +21,7 @@ import docker
 from docker.errors import ImageNotFound
 
 from app.config import config
+from app.report import compute_report
 
 SANDBOX_IMAGE = "data-cleanup-sandbox:latest"
 SANDBOX_DOCKERFILE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "sandbox")
@@ -55,12 +57,12 @@ def _read_call_for(original_filename: str) -> str:
 
 def _build_harness(generated_code: str, target_schema: list[dict], original_filename: str) -> str:
     read_call = _read_call_for(original_filename)
-    # The harness computes the report itself from TargetSchema's
-    # required/structurallyOptional flags cross-referenced against the
-    # ACTUAL output — the model no longer produces a report at all, per
-    # docs/05-llm-prompting.md's "Verification, not blind trust" (two
-    # independent real generations broke trying to satisfy that part of
-    # an earlier contract; the harness has better ground truth anyway).
+    # compute_report's source is embedded verbatim (not imported — code
+    # inside the sandbox can't `import app.report`) so the in-sandbox path
+    # and the on-demand-audit path (Phase 4, called directly outside the
+    # sandbox) can never drift apart. See app/report.py's docstring for
+    # why that matters — a real bug already lived in this exact logic once.
+    compute_report_src = inspect.getsource(compute_report)
     return f'''import json
 import pandas as pd
 
@@ -73,30 +75,9 @@ cleaned_df.to_csv("/work/output/cleaned.csv", index=False)
 
 target_schema = {target_schema!r}
 
-report = {{"unmapped_fields": [], "flagged_gaps": []}}
-for col in target_schema:
-    name = col["name"]
-    # A column the model's clean() didn't produce at all is exactly as
-    # much a gap as one that exists but is 100% null — found the hard way
-    # in a real end-to-end run: a required column the model never
-    # attempted was recorded in unmapped_fields but skipped by `continue`
-    # before the required/severity check ever ran, so the report claimed
-    # "no required fields missing" while a required field was, in fact,
-    # entirely missing. Treat "absent" as "null on every row" for scoring,
-    # while still recording it in unmapped_fields for visibility into
-    # *why* (the model didn't even try, vs. it tried and produced nulls).
-    if name not in cleaned_df.columns:
-        report["unmapped_fields"].append(name)
-        null_count = len(cleaned_df)
-    else:
-        null_count = int(cleaned_df[name].isna().sum() + (cleaned_df[name].astype(str) == "").sum())
-        if null_count == 0:
-            continue
-    if col["required"]:
-        report["flagged_gaps"].append({{"column": name, "null_count": null_count, "severity": "required_missing"}})
-    elif not col["structurallyOptional"]:
-        report["flagged_gaps"].append({{"column": name, "null_count": null_count, "severity": "unexpected_gap"}})
-    # required=False and structurallyOptional=True: expected sparsity, not flagged.
+{compute_report_src}
+
+report = compute_report(cleaned_df, target_schema)
 
 measured = {{
     "input_row_count": len(df),
