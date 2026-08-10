@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "fs/promises";
+import { mkdir, readFile, writeFile } from "fs/promises";
 import path from "path";
 import { randomUUID } from "crypto";
 
@@ -24,4 +24,13 @@ export async function saveUploadedFile(userId: string, file: File): Promise<{ re
   await writeFile(absolutePath, buffer);
 
   return { relativePath: path.join("uploads", userId, filename) };
+}
+
+// Reads a Dataset.filePath (always cleaned.csv — apps/ai-service/app/sandbox.py)
+// as text, for the presentation route (app/present/[sessionId]/page.tsx) to
+// parse and render.
+export async function readStorageFileText(relativePath: string): Promise<string> {
+  const absolutePath = path.join(/* turbopackIgnore: true */ STORAGE_ROOT, relativePath);
+  const buffer = await readFile(absolutePath);
+  return buffer.toString("utf-8");
 }

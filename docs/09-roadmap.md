@@ -61,11 +61,11 @@ Phased so each phase produces something runnable/demoable, and so the highest-ri
 - Output-structure-aware ingestion into `UploadedFile`/`Attachment` — done, extension-based routing (spreadsheet → `UploadedFile`, media → `Attachment`); job/customer id extraction from Attachment paths deliberately left as a v1 gap (`docs/03-ingestion-and-scrapers.md`).
 - Extend to the remaining ~5 scraper platforms once the pattern is proven on House Call Pro — not started; deliberately not running any real scraper against live credentials without explicit user go-ahead first, independent of the mechanics being proven end-to-end.
 
-## Phase 6 — Zoom Presentation Bot
+## Phase 6 — Zoom Presentation Bot — IN PROGRESS
 
-- Only starts once Phase 0's Zoom spike has a validated approach (native or fallback).
-- `/present/[sessionId]` route.
-- Zoom Bot Service productionized from the spike.
+- Only starts once Phase 0's Zoom spike has a validated approach (native or fallback) — done, native path validated.
+- `/present/[sessionId]` route — done, tested end-to-end (browser → `PresentationSession` → CSV/attachment render). See `docs/07-zoom-bot.md`'s "Phase 6 build status."
+- Zoom Bot Service productionized from the spike — not started yet; needs the project owner for the final live-meeting validation, same as Phase 0's spike did.
 
 ## Phase 7 — Raspberry Pi Controller
 

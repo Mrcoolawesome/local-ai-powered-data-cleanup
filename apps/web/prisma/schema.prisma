@@ -20,11 +20,13 @@ model User {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  targetSchemas      TargetSchema[]
-  uploadedFiles      UploadedFile[]
-  datasets           Dataset[]
-  chatSessions       ChatSession[]
-  scraperDefinitions ScraperDefinition[]
+  targetSchemas        TargetSchema[]
+  uploadedFiles        UploadedFile[]
+  datasets             Dataset[]
+  chatSessions         ChatSession[]
+  scraperDefinitions   ScraperDefinition[]
+  presentationSessions PresentationSession[]
+  auditLogs            AuditLog[]
 }
 
 // Singleton row (fixed id) rather than per-user: the Ollama endpoint is one
@@ -132,9 +134,10 @@ model Dataset {
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 
-  uploadedFiles UploadedFile[]
-  cleaningRuns  CleaningRun[]
-  chatSessions  ChatSession[]
+  uploadedFiles        UploadedFile[]
+  cleaningRuns         CleaningRun[]
+  chatSessions         ChatSession[]
+  presentationSessions PresentationSession[]
 }
 
 enum CleaningRunStatus {
@@ -260,8 +263,9 @@ model ScraperRun {
   startedAt           DateTime          @default(now())
   finishedAt          DateTime?
 
-  uploadedFiles UploadedFile[]
-  attachments   Attachment[]
+  uploadedFiles        UploadedFile[]
+  attachments          Attachment[]
+  presentationSessions PresentationSession[]
 }
 
 // A file (photo, document) pulled by a scraper and tied to a business
@@ -280,4 +284,72 @@ model Attachment {
   customerId    String?
   invoiceNumber String?
   createdAt     DateTime   @default(now())
+}
+
+enum PresentationViewKind {
+  DATASET
+  ATTACHMENTS
+}
+
+enum PresentationSessionStatus {
+  IDLE
+  JOINING
+  SHARING
+  ERROR
+}
+
+// Tracks what's currently "live" for the Zoom bot + Pi controller
+// (docs/07-zoom-bot.md, docs/08-raspberry-pi-controller.md). `/present/[id]`
+// renders whatever this points at. Two nullable FKs rather than one
+// polymorphic pointer — Prisma has no first-class polymorphic relation, and
+// the two "kinds" a session can show (a cleaned Dataset table, or an
+// Attachment set) are different enough shapes that a single generic
+// "entityId: String" column would need app-code guessing to resolve; a
+// discriminated pair the DB can still enforce FK integrity on is worth the
+// two extra nullable columns.
+//
+// v1 simplification: "attachments" mode points at one ScraperRun (shows
+// every Attachment from that run) rather than a finer per-job/per-customer
+// grouping — matches the same v1 gap noted on Attachment.jobId/customerId
+// in docs/03-ingestion-and-scrapers.md (no per-platform path parser yet).
+model PresentationSession {
+  id                 String                     @id @default(cuid())
+  userId             String
+  user               User                       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  zoomMeetingId      String?
+  status             PresentationSessionStatus  @default(IDLE)
+  activeViewKind     PresentationViewKind?
+  activeDatasetId    String?
+  activeDataset      Dataset?                   @relation(fields: [activeDatasetId], references: [id])
+  activeScraperRunId String?
+  activeScraperRun   ScraperRun?                @relation(fields: [activeScraperRunId], references: [id])
+  createdAt          DateTime                   @default(now())
+  updatedAt          DateTime                   @updatedAt
+
+  @@index([userId])
+}
+
+// Append-only compliance/traceability record (docs/02-data-model.md) —
+// `entityType`/`entityId` are a loose polymorphic pair (no DB-level FK,
+// same tradeoff SQL always has for "one log table, many referenced kinds")
+// rather than one column per subsystem, since new subsystems (this phase's
+// PresentationSession view switches, per docs/08-raspberry-pi-controller.md)
+// shouldn't need a schema migration just to start logging.
+//
+// Known gap, stated rather than silently absent: only this phase's new
+// PresentationSession-related actions write here so far. Retrofitting
+// every earlier phase's mutating action (schema edits, cleaning runs,
+// scraper runs) to also log here is real follow-up work, not done in this
+// pass — scoped out to keep Phase 6 bounded to what it actually needed.
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  action     String
+  entityType String
+  entityId   String
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  @@index([userId, createdAt])
 }
