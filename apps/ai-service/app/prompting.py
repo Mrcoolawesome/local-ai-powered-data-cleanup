@@ -165,7 +165,21 @@ prose before or after, no markdown code fence — with these fields:
 
 - setup_commands: array of strings — one-time setup commands (e.g. "pip3 install ...").
   Empty array if the README documents no setup step.
-- run_command: string — the exact command that actually runs the scraper.
+- run_command: string — the single command that runs the scraper, or (if
+  available_operations below is non-empty) a sensible default such as running every
+  operation's command in sequence, joined with " && " — a full/complete export.
+- available_operations: array of {label, command} objects, or an empty array. Some
+  scrapers offer more than one distinct thing to run — separate scripts per data
+  category (e.g. a contacts script, a jobs script, an invoices script), or one script
+  with a flag selecting categories (e.g. "--only invoices,estimates" where the README
+  documents other valid category names too). When the README documents more than one
+  such option, list EACH one as its own entry: label is a short human-readable name
+  (e.g. "Contacts", "Invoices + Estimates"), command is the exact shell command for
+  just that operation. Leave this an empty array if the README only documents one way
+  to run the scraper, with no meaningful category/scope choice — don't invent a
+  breakdown that isn't actually there. This lets a human choose a full export (every
+  operation) or just specific ones, rather than being forced into whichever single
+  command you'd otherwise have to pick.
 - expected_output_pattern: string — the file/directory naming pattern the README says
   output lands at (e.g. "output/{COMPANY_NAME}/{job_number}/{filename}").
 - watch_signals: array of strings — literal stdout substrings the README says indicate

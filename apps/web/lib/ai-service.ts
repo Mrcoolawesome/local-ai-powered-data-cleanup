@@ -128,9 +128,22 @@ export function chatQuestion(params: {
 
 // --- Scraper agent (Phase 5, docs/03-ingestion-and-scrapers.md) -----------
 
+export type ScraperOperation = { label: string; command: string };
+
 export type ScraperPlan = {
   setup_commands: string[];
+  // A sensible default (e.g. every operation joined with "&&") when
+  // available_operations is non-empty — the actual command run is
+  // reconstructed from the user's checkbox selection instead when there's
+  // a choice, so this is only the fallback for scrapers with no such
+  // choice documented.
   run_command: string;
+  // Non-empty only when the README documents more than one distinct thing
+  // to run (separate scripts per category, or one script with selectable
+  // category flags) — lets the run form offer "full export" (everything
+  // checked, the default) or specific ones, instead of forcing a single
+  // fixed command.
+  available_operations?: ScraperOperation[];
   expected_output_pattern: string;
   watch_signals: string[];
   confidence: "high" | "medium" | "low";

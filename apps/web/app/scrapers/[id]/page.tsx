@@ -69,7 +69,16 @@ export default async function ScraperDetailPage({
     const confirmed = formData.get("confirm") === "on";
     if (!confirmed) redirect(`/scrapers/${id}?plan=1&error=${encodeURIComponent("Confirmation checkbox is required to run a real scraper.")}`);
 
-    const runCommand = formData.get("runCommand") as string;
+    // When the plan offered a choice of operations (checkboxes below), the
+    // actual command is whichever ones got checked, joined in sequence —
+    // "everything checked" (the default) is a full export; unchecking some
+    // narrows it. Falls back to the plan's own single run_command when
+    // there was no such choice to make.
+    const selectedOperations = formData.getAll("operations") as string[];
+    const runCommand = selectedOperations.length > 0 ? selectedOperations.join(" && ") : (formData.get("runCommand") as string);
+    if (!runCommand) {
+      redirect(`/scrapers/${id}?plan=1&error=${encodeURIComponent("Select at least one operation to run.")}`);
+    }
     const setupCommands = (formData.get("setupCommands") as string)
       .split("\n")
       .map((s) => s.trim())
@@ -260,10 +269,12 @@ export default async function ScraperDetailPage({
                     {plan.setup_commands.join("\n") || "(none)"}
                   </pre>
                 </div>
-                <div>
-                  <span className="font-medium">Run:</span>
-                  <pre className="mt-1 overflow-x-auto rounded-md bg-muted p-2 text-xs">{plan.run_command}</pre>
-                </div>
+                {(!plan.available_operations || plan.available_operations.length === 0) && (
+                  <div>
+                    <span className="font-medium">Run:</span>
+                    <pre className="mt-1 overflow-x-auto rounded-md bg-muted p-2 text-xs">{plan.run_command}</pre>
+                  </div>
+                )}
                 <div>
                   <span className="font-medium">Watch signals:</span>
                   <pre className="mt-1 overflow-x-auto rounded-md bg-muted p-2 text-xs">
@@ -276,6 +287,28 @@ export default async function ScraperDetailPage({
                 <input type="hidden" name="setupCommands" value={plan.setup_commands.join("\n")} />
                 <input type="hidden" name="runCommand" value={plan.run_command} />
                 <input type="hidden" name="watchSignals" value={plan.watch_signals.join("\n")} />
+                {plan.available_operations && plan.available_operations.length > 0 && (
+                  <div className="flex flex-col gap-2 text-sm">
+                    <div>
+                      <span className="font-medium">What to run:</span>
+                      <p className="text-muted-foreground text-xs">
+                        Everything is selected by default — a full export. Uncheck anything you don&apos;t want this
+                        run to include.
+                      </p>
+                    </div>
+                    <div className="flex flex-col gap-2 rounded-md bg-muted p-2">
+                      {plan.available_operations.map((op, i) => (
+                        <div key={i} className="flex items-start gap-2">
+                          <Checkbox id={`op-${i}`} name="operations" value={op.command} defaultChecked />
+                          <Label htmlFor={`op-${i}`} className="flex flex-col gap-0.5 text-sm font-normal">
+                            <span>{op.label}</span>
+                            <code className="text-muted-foreground text-xs">{op.command}</code>
+                          </Label>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 <input type="hidden" name="planJson" value={JSON.stringify(plan)} />
                 {plan.credentials_env_filename && plan.credentials_env_template && (
                   <>
