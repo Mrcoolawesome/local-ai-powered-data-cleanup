@@ -24,6 +24,7 @@ dist/
 build/
 __pycache__/
 *.pyc
+.venv/
 
 # Local file storage for uploads/attachments — never belongs in git
 /storage/
