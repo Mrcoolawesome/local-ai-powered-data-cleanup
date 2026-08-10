@@ -79,7 +79,7 @@ export default async function ScraperDetailPage({
     if (!runCommand) {
       redirect(`/scrapers/${id}?plan=1&error=${encodeURIComponent("Select at least one operation to run.")}`);
     }
-    const setupCommands = (formData.get("setupCommands") as string)
+    let setupCommands = (formData.get("setupCommands") as string)
       .split("\n")
       .map((s) => s.trim())
       .filter(Boolean);
@@ -92,6 +92,23 @@ export default async function ScraperDetailPage({
     const credentialsEnvTemplate = formData.get("credentialsEnvTemplate") as string;
     const email = (formData.get("email") as string) || "";
     const password = (formData.get("password") as string) || "";
+    const willWriteCredentials = Boolean(credentialsEnvFilename && credentialsEnvTemplate && email && password);
+
+    // Found for real: a scraper's own setup step commonly does
+    // `cp housecallpro.env.example housecallpro.env` to seed the file with
+    // placeholder values — since writeScraperCredentials below writes that
+    // SAME file with the real ones first, running this setup command
+    // afterward silently clobbers the real credentials right back to
+    // "you@example.com"/"your-password" before the script ever runs
+    // (confirmed for real: the scraper logged "Auto-login failed" because
+    // the file it read back held the template's placeholders, not what
+    // was just submitted). Strip any setup command that copies something
+    // ONTO the credentials filename — writing the real file already
+    // achieves what that step exists for.
+    if (willWriteCredentials) {
+      const cpToCredentialsFile = new RegExp(`\\bcp\\s+\\S+\\s+${credentialsEnvFilename.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`);
+      setupCommands = setupCommands.filter((cmd) => !cpToCredentialsFile.test(cmd));
+    }
 
     const commandExecuted = [...setupCommands, runCommand].join(" && ");
     const run = await prisma.scraperRun.create({
@@ -108,7 +125,7 @@ export default async function ScraperDetailPage({
       // filled in — leaving them blank keeps whatever's already saved in
       // the scraper's directory from an earlier run/manual setup, rather
       // than clobbering it with empty values.
-      if (credentialsEnvFilename && credentialsEnvTemplate && email && password) {
+      if (willWriteCredentials) {
         await writeScraperCredentials({
           scraperDirRelativePath: definition.scriptPath,
           envFilename: credentialsEnvFilename,
