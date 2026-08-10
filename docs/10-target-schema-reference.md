@@ -1,47 +1,36 @@
-# Target Schema Reference (derived from `/example-data`)
+# Target Schema Reference
 
-`/example-data` holds a real customer export (gitignored — it contains live customer PII: names, emails, phones, addresses, so it never enters git). This doc captures the *structure* only — column names and aggregate missingness stats, nothing identifying — so the target-schema and cleaning-rule design in later phases has a concrete reference without needing to re-open that file or expose its contents anywhere version-controlled.
+`apps/web/lib/target-schema.ts`'s `TARGET_SCHEMA_TEMPLATES` is seeded directly from the customer's own real migration template ("Copy of Podium Migration Template.xlsx", provided directly by the project owner — not derived or inferred from a sample export). It's the authoritative field list for what a Podium migration actually needs, covering all 8 sheets the template defines. This doc records how those columns/flags were read from that file, so the mapping stays traceable without needing to re-open the spreadsheet.
 
-The export is from a **Jobber**-platform scrape (the user's other scraper source, distinct from the House Call Pro examples in `/example-scrapers`). Its column names closely track the "Lighthouse" field names referenced in the HCP README (`external_id`, `job_number`/`job_id`, `line_items_json`, `subtotal_cents`/`total_cents`, `customer_uid`) — confirming the target schema is meant to be platform-agnostic: both Jobber and HouseCall Pro data normalize down to the same shape. This is what `TargetSchema` should encode per entity type, independent of which of the ~7 scrapers produced the raw file.
+**Supersedes an earlier version of this doc** derived from a real Jobber-platform customer export (`/example-data`, gitignored — contained live PII). That version only covered 3 entity types (Contacts, Jobs, Invoices) and used different column names in places (e.g. `job_number` vs. this template's `job_id`) — useful at the time for confirming the target schema could be platform-agnostic (Jobber and House Call Pro data normalize to the same rough shape), but no longer an accurate reference for what's actually implemented now that the customer's own authoritative template exists.
 
-The file has 7 sheets; **Attachments Manifest is out of scope here** (per instruction — it's a file-listing sheet, not a business-entity target schema, and belongs with the `Attachment` ingestion path in [03-ingestion-and-scrapers.md](./03-ingestion-and-scrapers.md) instead).
+## How `required` was read
 
-## Contacts (1,563 rows)
+The template's header row color-codes every column — dark red fill (`C00000`) for required, blue fill (`2F5597`) for optional-but-expected. That's what `required: true/false` in `TARGET_SCHEMA_TEMPLATES` maps to directly, read from the actual cell fill colors (`openpyxl`), not inferred from anything else. `structurallyOptional` is a separate judgment call this doc's earlier version already established the pattern for — a column can be real and expected (not `required: false` because it's unimportant) while still being sparse in practice for structural reasons (e.g. `unit` empty because most addresses aren't multi-unit, `next_auto_renewal` empty because most memberships aren't auto-renewing) — that's the flag the Phase 3 audit report uses to avoid drowning genuine gaps in expected sparseness.
 
-`phone, email, first_name, last_name, street_address, unit, city, state, postal_code, country, company_name, is_company, is_lead, is_archived, tags, external_id, created_at, cf:Equipment, cf:Equipment Age, cf:Referred By`
+## The 8 sheets
 
-Notable dirtiness: `email` missing ~20%, `country` missing ~49%, `company_name` missing ~58% (expected — most contacts are individuals, not companies), `tags`/custom fields (`cf:*`) missing 94–100%. `unit` missing ~88% is expected (most addresses aren't multi-unit) — a cleaning rule should treat that as normal-empty, not a data-quality flag.
+| Sheet (template) | Entity type (this app) | Columns | Required |
+|---|---|---|---|
+| Customers | `Contacts` | 15 | 1 (`first_name`) |
+| Job History | `Jobs` | 18 | 4 (`job_id`, `customer_name`, `job_title`, `job_start_date`) |
+| Invoices | `Invoices` | 13 | 3 (`external_id`, `status`, `total_cents`) |
+| Estimates | `Estimates` | 14 | 3 (`name`, `total_cents`, `subtotal_cents`) |
+| Pricebook - Services | `Pricebook - Services` | 16 | 2 (`category`, `name`) |
+| Pricebook - Materials | `Pricebook - Materials` | 13 | 2 (`category`, `name`) |
+| Equipment | `Equipment` | 23 | 1 (`equipment_type`) |
+| Members | `Memberships` | 15 | 1 (`contact_name`) |
 
-## Jobs (2,564 rows)
+Column names/types/required flags are in `apps/web/lib/target-schema.ts` itself, not duplicated here — this table is for cross-checking against the source spreadsheet, not a copy of the schema.
 
-`job_number, external_id, job_start_date, start_time, job_end_date, end_time, title, job_type, status, technician, customer_name, customer_email, customer_phone, street_address, unit, city, state, postal_code, notes, attachment_count, attachment_filenames, client_uid, property_uid, created_at, total`
+**One data quirk in the source template, handled rather than silently reproduced:** the Members sheet has two separate columns both literally labeled `notes` (positions 13 and 16) — almost certainly a copy-paste artifact in the original spreadsheet, since nothing distinguishes what each would hold. Merged into a single `notes` column in `TARGET_SCHEMA_TEMPLATES.Memberships` rather than kept as a literal duplicate name, since this app's own column-identity model (`schemas/[id]/page.tsx`'s `addColumn`/`removeColumn`, keyed by `name`) assumes names are unique within a `TargetSchema` — two columns both named `notes` would make removing one ambiguously remove both.
 
-Notable dirtiness: `customer_phone` missing ~22%, `technician` missing ~8%, `attachment_filenames` missing ~28% (jobs with no photos — expected, not an error).
+**No sample data in the source file** — every sheet's data rows (beyond the header) are empty; this is a pure template, not an export with real rows to derive missingness statistics from (unlike the superseded Jobber-export version of this doc, which had real row counts and % -missing numbers). `structurallyOptional` judgment calls here are carried over from that earlier version's reasoning (the same *kind* of field tends to be structurally sparse regardless of source platform — a `unit` column is still usually empty because most addresses aren't multi-unit, independent of which platform produced the export) rather than re-measured against this file, since there's no data in it to measure.
 
-## Invoices (4,234 rows)
+## Verified for real
 
-`external_id, invoice_number, status, subtotal_cents, total_cents, tax_amount_cents, discount_amount_cents, payments_total, balance, customer_uid, customer_name, customer_email, customer_phone, job_external_ids, issue_date, due_date, created_at, notes, line_items_json`
+Created a `TargetSchema` from all 8 templates through the actual running app (`/schemas`'s "Create from template" form) and confirmed in Postgres that every sheet's column count and required-column count matched the source spreadsheet exactly — not just spot-checked, all 8.
 
-Relatively clean — biggest gap is `customer_phone` missing ~14%. This is the most complete sheet in the export.
+## Design implication (carried over, still applies)
 
-## Estimates (629 rows)
-
-`external_estimate_id, name, estimate_status, subtotal_cents, total_cents, tax_amount_cents, discount_amount_cents, deposit_amount, customer_uid, customer_name, customer_email, customer_phone, property_uid, job_external_ids, created_at, sent_at, notes, line_items_json`
-
-Notable dirtiness: `job_external_ids` missing ~44% (estimates not yet tied to a job — expected for open/lost estimates), `notes` missing ~99% (essentially unused field), `sent_at` missing ~18% (draft estimates never sent).
-
-## Memberships (103 rows)
-
-`membership_plan, contact_name, contact_phone_number, contact_email, address, number_of_systems, start_date, end_date, is_auto_renewal, next_auto_renewal, notes, source_job_number, client_uid, job_type, terms_collapsed`
-
-Notable dirtiness: `number_of_systems` missing ~97% (field essentially unused by this source platform), `next_auto_renewal` missing ~54% (non-auto-renewing memberships).
-
-## Pricebook (585 rows)
-
-`external_id, name, category, description, price, unit_price_template, last_quoted_price, internal_unit_cost, markup, taxable, duration_minutes, visible`
-
-Notable dirtiness: `duration_minutes` missing ~99% (unused field), `internal_unit_cost` missing ~41%, `last_quoted_price` missing ~52% — cost/pricing fields are the least reliably populated here.
-
-## Design implication
-
-A recurring pattern across every sheet: a large fraction of "missing" data is **structurally absent, not a data-quality defect** — `unit` empty because most addresses aren't multi-unit, `notes` empty because the field goes unused, `sent_at` empty because an estimate was never sent. The audit report generator ([04-ai-cleaning-and-audit.md](./04-ai-cleaning-and-audit.md)) needs a way to distinguish "missing and required" from "missing and structurally expected" per column — otherwise every audit report drowns the genuinely actionable gaps (e.g. `customer_phone` missing on ~14–22% of Jobs/Invoices, which *is* worth flagging) in noise from fields that are supposed to be sparse. This is naturally where `CleaningRule`/`TargetSchema`'s `required` flag ([02-data-model.md](./02-data-model.md)) does the work — required-and-missing gets surfaced prominently, optional-and-missing gets summarized quietly or omitted.
+A recurring pattern across every sheet: a large fraction of "missing" data is likely to be **structurally absent, not a data-quality defect** — `unit` empty because most addresses aren't multi-unit, `notes` empty because the field goes unused, cost/duration fields on pricebook entries sparsely filled because they're rarely tracked closely. The audit report generator ([04-ai-cleaning-and-audit.md](./04-ai-cleaning-and-audit.md)) needs a way to distinguish "missing and required" from "missing and structurally expected" per column — otherwise every audit report drowns the genuinely actionable gaps in noise from fields that are supposed to be sparse. This is naturally where `CleaningRule`/`TargetSchema`'s `required`/`structurallyOptional` flags ([02-data-model.md](./02-data-model.md)) do the work — required-and-missing gets surfaced prominently, structurally-optional-and-missing gets summarized quietly or omitted.
