@@ -161,7 +161,14 @@ def list_files_modified_since(scraper_dir_relative_path: str, since_epoch: float
 
     found = []
     for root, dirs, files in os.walk(local_scraper_dir):
-        dirs[:] = [d for d in dirs if d not in excluded_dirs]
+        # Any hidden directory (dot-prefixed), not just the explicitly named
+        # ones above — found for real setting up a persistent login-session
+        # directory (docs/03-ingestion-and-scrapers.md's credentials
+        # SESSION_DIR fix): a real browser profile dir holds dozens of
+        # cookies/local-storage/preference files that would otherwise all
+        # look like "new output" and get ingested as bogus Attachment rows
+        # pointing at Chrome-internal binary state, not scraped customer data.
+        dirs[:] = [d for d in dirs if d not in excluded_dirs and not d.startswith(".")]
         for name in files:
             if name in excluded_names or name.endswith(excluded_suffixes):
                 continue

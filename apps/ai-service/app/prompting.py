@@ -226,6 +226,23 @@ own content as the authoritative source for credentials_env_filename/credentials
 the ".example" template name) — don't fall back to null just because the README's own
 prose didn't spell out the variable names inline.
 
+The example/credentials file sometimes ALSO has other optional variables commented
+out — e.g. `# HOUSECALLPRO_SESSION_DIR=/path/to/persistent/chrome-profile`. If any such
+commented-out variable's NAME suggests it's a directory path for the scraper's own
+persistent state or output (contains words like SESSION, PROFILE, USER_DATA, CACHE,
+COOKIE, or OUTPUT/OUTPUT_DIR/DOWNLOAD), uncomment it in credentials_env_template and
+set it to a short RELATIVE path under the scraper's own working directory (e.g.
+`.session`, `./output`) instead of leaving it commented out or using the example's own
+placeholder path. Found for real: leaving it commented out means the scraper falls
+back to a path under the user's home directory, which inside this sandbox is a
+temporary directory wiped after every run — a login session or downloaded file
+written there is lost immediately, breaking both session persistence across runs and
+this app's own output-ingestion step (which only ever looks inside the scraper's own
+working directory, never the sandbox's temp home). Only do this for path-shaped
+variables that are about persistence/output location — leave unrelated optional
+settings (flags like HEADLESS, display names, category filters) exactly as the
+example file has them.
+
 If the README doesn't clearly document something, and no additional file resolves it,
 do not invent it — reflect that uncertainty in confidence/concerns instead."""
 
