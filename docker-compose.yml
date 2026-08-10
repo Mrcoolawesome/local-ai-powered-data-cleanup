@@ -53,13 +53,27 @@ services:
       AI_SERVICE_URL: http://ai-service:8000
       STORAGE_ROOT: /app/storage
       SCRAPERS_ROOT: /app/scrapers
+      # The client-side WS URL (app/present/[sessionId]/page.tsx,
+      # app/control/[sessionId]/page.tsx) needs the HOST-published port,
+      # not the container-internal one (ws-server.ts always binds 3001
+      # inside its own container regardless of what host port it's mapped
+      # to) — passed through so the page can embed the right port per
+      # deployment instead of a value baked in at image-build time.
+      WEB_WS_PORT: ${WEB_WS_PORT:-3001}
     ports:
-      - "3000:3000"
+      # Host-side ports are configurable (WEB_PORT/WEB_WS_PORT in .env,
+      # default 3000/3001) — a shared host running other Docker Compose
+      # stacks can easily already have 3000/3001 taken (found this for
+      # real deploying alongside an existing stack: 3000 was taken by one
+      # service, 3001 by another). The container-side ports stay fixed
+      # (3000 is what Next.js listens on, 3001 is ws-server.ts's default
+      # WS_PORT) — only the host-facing mapping needs to move.
+      - "${WEB_PORT:-3000}:3000"
       # WS control server (docs/08-raspberry-pi-controller.md) — same
       # container as the Next app on purpose, see apps/web/ws-server.ts's
-      # header comment; published here the same way port 3000 is so a Pi
+      # header comment; published here the same way WEB_PORT is so a Pi
       # controller or host browser can reach it at the same hostname.
-      - "3001:3001"
+      - "${WEB_WS_PORT:-3001}:3001"
     volumes:
       - ./storage:/app/storage
       # Real scraper installs (docs/03-ingestion-and-scrapers.md), starting

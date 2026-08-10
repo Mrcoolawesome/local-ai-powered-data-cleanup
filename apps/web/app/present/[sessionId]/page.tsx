@@ -30,7 +30,7 @@ export default async function PresentPage({ params }: { params: Promise<{ sessio
 
   return (
     <main className="h-dvh w-dvw overflow-auto bg-white p-6 text-black">
-      <PresentLiveReload sessionId={sessionId} />
+      <PresentLiveReload sessionId={sessionId} wsPort={process.env.WEB_WS_PORT || "3001"} />
 
       {session.activeViewKind === "DATASET" && session.activeDataset && (
         <DatasetView datasetId={session.activeDataset.id} filePath={session.activeDataset.filePath} name={session.activeDataset.name} />

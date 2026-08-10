@@ -10,12 +10,23 @@ import { useRouter } from "next/navigation";
 // glitch the native share"). Renders nothing; this is a side-effect-only
 // component deliberately kept separate from the page's own data-fetching
 // so the page itself stays a plain Server Component.
-export function PresentLiveReload({ sessionId }: { sessionId: string }) {
+//
+// `wsPort` comes from the parent Server Component reading process.env
+// (WEB_WS_PORT) rather than being hardcoded — the host-published WS port
+// isn't always 3001 (docker-compose.yml's WEB_WS_PORT is overridable for
+// exactly this reason: a shared host running other Compose stacks can
+// easily already have 3001 taken, found for real deploying alongside an
+// existing stack). NEXT_PUBLIC_* build-time env vars would bake a single
+// value into the client bundle at image-build time, which breaks the
+// moment two deployments of the same image use different ports; reading
+// it per-request server-side and passing it as a prop doesn't have that
+// problem.
+export function PresentLiveReload({ sessionId, wsPort }: { sessionId: string; wsPort: string }) {
   const router = useRouter();
 
   useEffect(() => {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const url = `${protocol}//${window.location.hostname}:3001/ws/${sessionId}`;
+    const url = `${protocol}//${window.location.hostname}:${wsPort}/ws/${sessionId}`;
 
     let socket: WebSocket;
     let reconnectTimer: ReturnType<typeof setTimeout>;
@@ -47,7 +58,7 @@ export function PresentLiveReload({ sessionId }: { sessionId: string }) {
       clearTimeout(reconnectTimer);
       socket?.close();
     };
-  }, [sessionId, router]);
+  }, [sessionId, wsPort, router]);
 
   return null;
 }

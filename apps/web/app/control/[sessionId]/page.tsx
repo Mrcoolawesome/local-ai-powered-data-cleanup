@@ -29,6 +29,7 @@ export default async function ControlPage({ params }: { params: Promise<{ sessio
   return (
     <ControlPanel
       sessionId={sessionId}
+      wsPort={process.env.WEB_WS_PORT || "3001"}
       initialActiveViewKind={session.activeViewKind}
       initialActiveDatasetId={session.activeDatasetId}
       initialActiveScraperRunId={session.activeScraperRunId}

@@ -10,6 +10,7 @@ type Target = { kind: "dataset" | "attachments"; id: string; label: string };
 // buttons, not a scaled-down version of the main app's UI.
 export function ControlPanel({
   sessionId,
+  wsPort,
   initialActiveViewKind,
   initialActiveDatasetId,
   initialActiveScraperRunId,
@@ -17,6 +18,10 @@ export function ControlPanel({
   scraperRuns,
 }: {
   sessionId: string;
+  // Read server-side from process.env.WEB_WS_PORT and passed down, not
+  // hardcoded — see components/present-live-reload.tsx's header comment
+  // for why (the host-published WS port isn't always 3001).
+  wsPort: string;
   initialActiveViewKind: string | null;
   initialActiveDatasetId: string | null;
   initialActiveScraperRunId: string | null;
@@ -31,7 +36,7 @@ export function ControlPanel({
 
   useEffect(() => {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const url = `${protocol}//${window.location.hostname}:3001/ws/${sessionId}`;
+    const url = `${protocol}//${window.location.hostname}:${wsPort}/ws/${sessionId}`;
 
     let reconnectTimer: ReturnType<typeof setTimeout>;
     let closedByUnmount = false;
@@ -66,7 +71,7 @@ export function ControlPanel({
       clearTimeout(reconnectTimer);
       socketRef.current?.close();
     };
-  }, [sessionId]);
+  }, [sessionId, wsPort]);
 
   function showView(target: Target) {
     socketRef.current?.send(JSON.stringify({ type: "SHOW_VIEW", target: { kind: target.kind, id: target.id } }));
