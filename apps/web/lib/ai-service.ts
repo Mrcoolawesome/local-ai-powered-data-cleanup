@@ -125,3 +125,20 @@ export function chatQuestion(params: {
     dataset_file_relative_path: params.datasetFileRelativePath,
   });
 }
+
+// --- Scraper agent (Phase 5, docs/03-ingestion-and-scrapers.md) -----------
+
+export type ScraperPlan = {
+  setup_commands: string[];
+  run_command: string;
+  expected_output_pattern: string;
+  watch_signals: string[];
+  confidence: "high" | "medium" | "low";
+  concerns?: string;
+};
+
+export function planScraperCommand(readmeRelativePath: string) {
+  return postJson<{ plan: ScraperPlan; raw_response: string }>("/scraper/plan", {
+    readme_relative_path: readmeRelativePath,
+  });
+}

@@ -52,10 +52,16 @@ services:
       AUTH_SECRET: ${AUTH_SECRET}
       AI_SERVICE_URL: http://ai-service:8000
       STORAGE_ROOT: /app/storage
+      SCRAPERS_ROOT: /app/scrapers
     ports:
       - "3000:3000"
     volumes:
       - ./storage:/app/storage
+      # Real scraper installs (docs/03-ingestion-and-scrapers.md), starting
+      # with the House Call Pro examples already on hand — read-only here,
+      # `web` only ever browses READMEs for registration, never executes
+      # anything or touches credentials.
+      - ./example-scrapers:/app/scrapers:ro
     depends_on:
       migrator:
         condition: service_completed_successfully
@@ -98,8 +104,20 @@ services:
       # path the daemon needs to bind-mount that same file for a sibling
       # container." Must be the absolute host path of ./storage below.
       AI_SERVICE_HOST_STORAGE_PATH: ${HOST_STORAGE_PATH}
+      AI_SERVICE_SCRAPERS_ROOT: /app/scrapers
+      # Same host-path-translation requirement as HOST_STORAGE_PATH above,
+      # for the same Docker-outside-of-Docker reason — a scraper run's
+      # sandbox container needs its own scraper directory bind-mounted
+      # read-write (session files, checkpoints, output), and that mount
+      # source has to be a real host path.
+      AI_SERVICE_HOST_SCRAPERS_PATH: ${HOST_SCRAPERS_PATH}
     volumes:
       - ./storage:/app/storage
+      # Read-write here (unlike web's :ro mount above) — scraper runs
+      # persist session state and checkpoint files into their own
+      # directory (docs/03), and that happens inside the sandbox
+      # container this service launches, not in ai-service itself.
+      - ./example-scrapers:/app/scrapers
       # Docker-outside-of-Docker: ai-service launches sandbox containers
       # (spikes/docker-sandbox's pattern) as siblings of itself via the
       # host's own daemon, not nested inside itself — see

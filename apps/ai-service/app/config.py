@@ -24,6 +24,12 @@ class Config(BaseSettings):
     # sandbox executor isn't exercised anyway.
     host_storage_path: str | None = None
 
+    # Real scraper installs (docs/03-ingestion-and-scrapers.md) — same
+    # container-path / host-path split as storage_root/host_storage_path
+    # above, same Docker-outside-of-Docker reason.
+    scrapers_root: str = "/app/scrapers"
+    host_scrapers_path: str | None = None
+
     class Config:
         env_prefix = "AI_SERVICE_"
 

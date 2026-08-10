@@ -20,10 +20,11 @@ model User {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  targetSchemas TargetSchema[]
-  uploadedFiles UploadedFile[]
-  datasets      Dataset[]
-  chatSessions  ChatSession[]
+  targetSchemas      TargetSchema[]
+  uploadedFiles      UploadedFile[]
+  datasets           Dataset[]
+  chatSessions       ChatSession[]
+  scraperDefinitions ScraperDefinition[]
 }
 
 // Singleton row (fixed id) rather than per-user: the Ollama endpoint is one
@@ -75,14 +76,14 @@ model TargetSchema {
 // pattern) and forcing one rigid shape now would fight Phase 3's actual
 // prompt-builder code before it exists.
 model CleaningRule {
-  id             String   @id @default(cuid())
+  id             String       @id @default(cuid())
   targetSchemaId String
   targetSchema   TargetSchema @relation(fields: [targetSchemaId], references: [id], onDelete: Cascade)
   rule           String
   rawDescription String
   structured     Json?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
 }
 
 enum FileSourceType {
@@ -109,6 +110,8 @@ model UploadedFile {
   status           FileStatus     @default(PENDING)
   datasetId        String?
   dataset          Dataset?       @relation(fields: [datasetId], references: [id])
+  scraperRunId     String?
+  scraperRun       ScraperRun?    @relation(fields: [scraperRunId], references: [id])
   createdAt        DateTime       @default(now())
 }
 
@@ -117,17 +120,17 @@ model UploadedFile {
 // was derived from. `filePath`/`rowCount` are null until Phase 3's
 // cleaning pipeline actually produces cleaned output.
 model Dataset {
-  id             String        @id @default(cuid())
+  id             String       @id @default(cuid())
   userId         String
-  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   name           String
   targetSchemaId String
-  targetSchema   TargetSchema  @relation(fields: [targetSchemaId], references: [id])
+  targetSchema   TargetSchema @relation(fields: [targetSchemaId], references: [id])
   filePath       String?
   rowCount       Int?
   lastCleanedAt  DateTime?
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
 
   uploadedFiles UploadedFile[]
   cleaningRuns  CleaningRun[]
@@ -205,4 +208,76 @@ model ChatMessage {
   content       String          @db.Text
   messageType   ChatMessageType @default(TEXT)
   createdAt     DateTime        @default(now())
+}
+
+enum ScraperRuntime {
+  PYTHON
+  NODE
+}
+
+// A registered scraper (docs/03-ingestion-and-scrapers.md) — `scriptPath`/
+// `readmePath` are relative to the shared scrapers root (docs/11-deployment.md,
+// mirrors the storage-root convention), not absolute paths, so both `web`
+// and `ai-service` resolve them the same way. `lastValidatedAt` is set by a
+// human, not inferred — READMEs drift out of sync with the actual platform
+// (the HCP v1→v2 rewrite in example-scrapers/ is exactly this happening for
+// real), so "an agent successfully ran this once" is not the same claim as
+// "a human confirmed this mapping is still correct."
+model ScraperDefinition {
+  id              String         @id @default(cuid())
+  userId          String
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  platformName    String
+  scriptPath      String
+  readmePath      String
+  runtime         ScraperRuntime
+  lastValidatedAt DateTime?
+  createdAt       DateTime       @default(now())
+
+  runs ScraperRun[]
+}
+
+enum ScraperRunStatus {
+  RUNNING
+  COMPLETED
+  INTERRUPTED
+  FAILED
+}
+
+// One agent-triggered execution (docs/03). `commandExecuted` and
+// `planJson` (the LLM's full command plan, including the confidence/
+// concerns fields) are kept even on failure — same "a bad generation is a
+// debuggable event" principle as CleaningRun.generatedScript.
+model ScraperRun {
+  id                  String            @id @default(cuid())
+  scraperDefinitionId String
+  scraperDefinition   ScraperDefinition @relation(fields: [scraperDefinitionId], references: [id], onDelete: Cascade)
+  commandExecuted     String
+  planJson            Json
+  status              ScraperRunStatus  @default(RUNNING)
+  logOutput           String?           @db.Text
+  filesIngestedCount  Int               @default(0)
+  startedAt           DateTime          @default(now())
+  finishedAt          DateTime?
+
+  uploadedFiles UploadedFile[]
+  attachments   Attachment[]
+}
+
+// A file (photo, document) pulled by a scraper and tied to a business
+// entity (docs/02-data-model.md). The entity-linking fields are loose and
+// nullable on purpose — not every platform's export has the same entity
+// graph (a House Call Pro job attachment has a job_number; some platforms
+// only ever expose a customer id), so forcing one required shape here
+// would fight the very "dynamically adapt to the output structure"
+// requirement this whole subsystem exists for.
+model Attachment {
+  id            String     @id @default(cuid())
+  scraperRunId  String
+  scraperRun    ScraperRun @relation(fields: [scraperRunId], references: [id], onDelete: Cascade)
+  filePath      String
+  jobId         String?
+  customerId    String?
+  invoiceNumber String?
+  createdAt     DateTime   @default(now())
 }

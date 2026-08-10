@@ -1,0 +1,18 @@
+# Scraper sandbox, Python runtime. Deliberately minimal — the plan's own
+# setup_commands (e.g. `pip3 install playwright ...`) install whatever a
+# specific scraper needs at run time, matching what a human following the
+# README would actually do, rather than this image trying to pre-bake
+# every possible scraper's dependencies.
+#
+# Known limitation: a Playwright-based scraper's `playwright install
+# chromium` step needs system libraries this slim base doesn't have
+# (fonts, X11 libs, etc.) — a real Playwright scraper run will likely need
+# this Dockerfile extended, or switched to Playwright's own official base
+# image, before it works. Not solved here since this spike/build phase
+# intentionally never runs the real Playwright-based HCP scraper against
+# live credentials — see docs/09-roadmap.md Phase 5's testing notes.
+FROM python:3.11-slim
+
+RUN useradd --no-create-home --uid 10001 scraper
+USER scraper
+WORKDIR /work

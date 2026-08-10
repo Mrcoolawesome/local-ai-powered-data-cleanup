@@ -4,6 +4,8 @@ Per docs/01-architecture.md: this service owns everything Python/LangChain/
 Ollama-specific. It never talks to Postgres directly (Next.js does, via
 Prisma) — Next.js calls this service and persists whatever it returns.
 """
+import time
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
@@ -13,16 +15,21 @@ from app.config import config
 from app.ollama_client import OllamaError, chat, list_models
 from app.prompting import (
     NoCodeBlockError,
+    ScraperPlanParseError,
     UnrecognizedIntentError,
     build_edit_system_prompt,
     build_intent_classification_prompt,
     build_question_system_prompt,
+    build_scraper_planning_prompt,
     build_system_prompt,
     extract_code_block,
     parse_intent,
+    parse_scraper_plan,
 )
 from app.sandbox import SandboxError, run_cleaning
 from app.schema_inference import SchemaInferenceError, compute_summary_stats, get_current_columns, infer_schema
+from app.scraper_fs import ScraperFsError, read_readme
+from app.scraper_sandbox import ScraperSandboxError, list_files_modified_since, run_scraper
 
 app = FastAPI(title="data-cleanup ai-service")
 
@@ -374,3 +381,88 @@ async def chat_question(req: ChatQuestionRequest):
         raise HTTPException(status_code=502, detail=str(e)) from e
 
     return {"reply": reply, "base_url": url, "model": model, "summary_stats": summary_stats}
+
+
+# --- Scraper agent (Phase 5, docs/03-ingestion-and-scrapers.md) -----------
+
+
+class ScraperPlanRequest(BaseModel):
+    readme_relative_path: str
+    base_url: str | None = None
+    model: str | None = None
+
+
+@app.post("/scraper/plan")
+async def scraper_plan(req: ScraperPlanRequest):
+    """Reads a real scraper README and asks the LLM for a structured
+    command plan. Read-only — does not execute anything. The README is
+    untrusted input the agent reads, not instructions it follows directly
+    (docs/06-security-sandboxing.md's prompt-injection awareness) — the
+    resulting plan is still subject to the same sandbox as everything else
+    when it's actually run (docs/11-deployment.md).
+    """
+    url = req.base_url or config.default_ollama_base_url
+    model = req.model or config.default_ollama_model
+
+    try:
+        readme_content = await run_in_threadpool(read_readme, req.readme_relative_path)
+    except ScraperFsError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+    system_prompt = build_scraper_planning_prompt()
+    try:
+        raw_response = await chat(
+            url,
+            model,
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": readme_content},
+            ],
+            options={"temperature": 0.1},
+        )
+    except OllamaError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+    try:
+        plan = parse_scraper_plan(raw_response)
+    except ScraperPlanParseError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+    return {"plan": plan, "raw_response": raw_response, "base_url": url, "model": model}
+
+
+class ExecuteScraperRequest(BaseModel):
+    scraper_dir_relative_path: str
+    runtime: str
+    setup_commands: list[str] = []
+    run_command: str
+    watch_signals: list[str] = []
+    timeout_seconds: int = 300
+
+
+@app.post("/scraper/execute")
+async def execute_scraper(req: ExecuteScraperRequest):
+    """Actually runs a scraper — network-enabled, the scraper's own
+    directory (including its saved session/.env) mounted read-write. This
+    is the consequential endpoint in this whole subsystem: it makes real
+    requests against whatever platform the scraper targets, using
+    whatever credentials are sitting in that directory. Next.js is
+    expected to have gotten explicit user confirmation before calling
+    this — see docs/03-ingestion-and-scrapers.md.
+    """
+    started_at = time.time()
+    try:
+        result = await run_in_threadpool(
+            run_scraper,
+            req.scraper_dir_relative_path,
+            req.runtime,
+            req.setup_commands,
+            req.run_command,
+            req.watch_signals,
+            req.timeout_seconds,
+        )
+    except ScraperSandboxError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+    new_files = await run_in_threadpool(list_files_modified_since, req.scraper_dir_relative_path, started_at)
+    return {**result, "new_files": new_files}
