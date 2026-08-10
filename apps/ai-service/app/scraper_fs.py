@@ -20,6 +20,33 @@ def read_readme(readme_relative_path: str) -> str:
         return f.read()
 
 
+# A "cp X.env.example X.env, fill in your email/password" setup step is a
+# common real-world pattern (found for real: HouseCallPro-Exporter's README
+# says exactly this) — the actual KEY=value variable names then live in
+# that example file, not spelled out in the README's own prose. Without
+# this, the planning LLM (which only ever saw the README text) has no way
+# to know the real variable names and correctly declines to guess
+# (docs/05-llm-prompting.md's "do not invent"), which is the right call
+# given only the README — but means credentials_env_filename/template come
+# back null even though the scraper clearly does take a login. Reading
+# this file too, when present, closes that gap.
+_CREDENTIALS_EXAMPLE_SUFFIXES = (".env.example", ".env.sample", ".env.template", ".env.dist")
+
+
+def find_credentials_example_file(scraper_dir_relative_path: str) -> tuple[str, str] | None:
+    scraper_dir = os.path.join(config.scrapers_root, scraper_dir_relative_path)
+    if not os.path.isdir(scraper_dir):
+        return None
+    for name in sorted(os.listdir(scraper_dir)):
+        full_path = os.path.join(scraper_dir, name)
+        if not os.path.isfile(full_path):
+            continue
+        if name.lower().endswith(_CREDENTIALS_EXAMPLE_SUFFIXES):
+            with open(full_path, encoding="utf-8") as f:
+                return name, f.read()
+    return None
+
+
 # Writes a scraper's login credentials into its own directory, in whatever
 # filename/format that specific scraper's README documents — extracted by
 # the planning LLM as credentials_env_filename/credentials_env_template

@@ -188,8 +188,18 @@ prose before or after, no markdown code fence — with these fields:
   "HCP_EMAIL"), use the real names from the README on the left of "=", still with the
   {{EMAIL}}/{{PASSWORD}} placeholders on the right.
 
-If the README doesn't clearly document something, do not invent it — reflect that
-uncertainty in confidence/concerns instead."""
+Sometimes the README's setup step just says to copy an example credentials file
+(e.g. "cp housecallpro.env.example housecallpro.env, fill in your email/password")
+without spelling out the variable names itself — the real KEY=value format then lives
+in that example file, not the README's own prose. If the input you're given includes a
+section labeled "ADDITIONAL FILE FOUND IN THIS SCRAPER'S DIRECTORY", treat that file's
+own content as the authoritative source for credentials_env_filename/credentials_env_template
+(use the REAL filename the README's setup step copies TO, e.g. "housecallpro.env", not
+the ".example" template name) — don't fall back to null just because the README's own
+prose didn't spell out the variable names inline.
+
+If the README doesn't clearly document something, and no additional file resolves it,
+do not invent it — reflect that uncertainty in confidence/concerns instead."""
 
 
 class ScraperPlanParseError(Exception):

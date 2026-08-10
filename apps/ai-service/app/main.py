@@ -4,6 +4,7 @@ Per docs/01-architecture.md: this service owns everything Python/LangChain/
 Ollama-specific. It never talks to Postgres directly (Next.js does, via
 Prisma) — Next.js calls this service and persists whatever it returns.
 """
+import os
 import time
 
 from fastapi import FastAPI, HTTPException
@@ -28,7 +29,7 @@ from app.prompting import (
 )
 from app.sandbox import SandboxError, run_cleaning
 from app.schema_inference import SchemaInferenceError, compute_summary_stats, get_current_columns, infer_schema
-from app.scraper_fs import ScraperFsError, read_readme, write_credentials_env
+from app.scraper_fs import ScraperFsError, find_credentials_example_file, read_readme, write_credentials_env
 from app.scraper_sandbox import ScraperSandboxError, list_files_modified_since, run_scraper
 
 app = FastAPI(title="data-cleanup ai-service")
@@ -409,6 +410,22 @@ async def scraper_plan(req: ScraperPlanRequest):
     except ScraperFsError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
 
+    # A "cp X.env.example X.env" setup step (found for real: HouseCallPro-Exporter)
+    # means the actual credential variable names live in that example file,
+    # not the README's own prose — include it as extra context when present
+    # so the plan can extract the real names instead of correctly declining
+    # to guess. scraper_dir is readme_relative_path's own directory, so this
+    # needs no new request field.
+    scraper_dir = os.path.dirname(req.readme_relative_path)
+    example_file = await run_in_threadpool(find_credentials_example_file, scraper_dir)
+    user_content = readme_content
+    if example_file:
+        example_name, example_content = example_file
+        user_content += (
+            f"\n\n---\nADDITIONAL FILE FOUND IN THIS SCRAPER'S DIRECTORY: {example_name}\n"
+            f"(likely the credentials file template referenced in the README's setup step)\n{example_content}"
+        )
+
     system_prompt = build_scraper_planning_prompt()
     try:
         raw_response = await chat(
@@ -416,7 +433,7 @@ async def scraper_plan(req: ScraperPlanRequest):
             model,
             [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": readme_content},
+                {"role": "user", "content": user_content},
             ],
             options={"temperature": 0.1},
         )
