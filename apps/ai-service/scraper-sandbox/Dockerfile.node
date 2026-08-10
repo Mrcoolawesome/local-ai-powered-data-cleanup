@@ -21,6 +21,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     chromium \
     && rm -rf /var/lib/apt/lists/*
 
+# Found for real, running an actual scraper: some scripts hardcode Puppeteer's
+# executablePath to their author's own Mac Chrome install
+# ("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome") with no
+# environment-variable override at all — PUPPETEER_EXECUTABLE_PATH
+# (scraper_sandbox.py) does nothing for a script that never reads it.
+# Rather than edit a scraper's own script (that's the scraper owner's code,
+# not this project's), satisfy the hardcoded path directly: create that
+# exact path inside the sandbox image, pointing at the real Chromium
+# installed above. Fixes every script hardcoding this same Mac path (found
+# 3 in one real scraper) without touching any of them.
+RUN mkdir -p "/Applications/Google Chrome.app/Contents/MacOS" && \
+    ln -s /usr/bin/chromium "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+
 RUN useradd --no-create-home --uid 10001 scraper
 USER scraper
 WORKDIR /work
