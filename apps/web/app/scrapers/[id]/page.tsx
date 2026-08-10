@@ -3,12 +3,13 @@ import Link from "next/link";
 import { revalidatePath } from "next/cache";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { planScraperCommand, executeScraper, AiServiceError } from "@/lib/ai-service";
+import { planScraperCommand, executeScraper, writeScraperCredentials, AiServiceError } from "@/lib/ai-service";
 import { ingestScraperOutputFile } from "@/lib/scraper-ingest";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 
@@ -77,6 +78,10 @@ export default async function ScraperDetailPage({
       .map((s) => s.trim())
       .filter(Boolean);
     const planJson = JSON.parse(formData.get("planJson") as string);
+    const credentialsEnvFilename = formData.get("credentialsEnvFilename") as string;
+    const credentialsEnvTemplate = formData.get("credentialsEnvTemplate") as string;
+    const email = (formData.get("email") as string) || "";
+    const password = (formData.get("password") as string) || "";
 
     const commandExecuted = [...setupCommands, runCommand].join(" && ");
     const run = await prisma.scraperRun.create({
@@ -89,6 +94,20 @@ export default async function ScraperDetailPage({
     });
 
     try {
+      // Only writes the credentials file when both fields were actually
+      // filled in — leaving them blank keeps whatever's already saved in
+      // the scraper's directory from an earlier run/manual setup, rather
+      // than clobbering it with empty values.
+      if (credentialsEnvFilename && credentialsEnvTemplate && email && password) {
+        await writeScraperCredentials({
+          scraperDirRelativePath: definition.scriptPath,
+          envFilename: credentialsEnvFilename,
+          envTemplate: credentialsEnvTemplate,
+          email,
+          password,
+        });
+      }
+
       const result = await executeScraper({
         scraperDirRelativePath: definition.scriptPath,
         runtime: definition.runtime,
@@ -235,6 +254,29 @@ export default async function ScraperDetailPage({
                 <input type="hidden" name="runCommand" value={plan.run_command} />
                 <input type="hidden" name="watchSignals" value={plan.watch_signals.join("\n")} />
                 <input type="hidden" name="planJson" value={JSON.stringify(plan)} />
+                {plan.credentials_env_filename && plan.credentials_env_template && (
+                  <>
+                    <input type="hidden" name="credentialsEnvFilename" value={plan.credentials_env_filename} />
+                    <input type="hidden" name="credentialsEnvTemplate" value={plan.credentials_env_template} />
+                    <div className="flex flex-col gap-2 text-sm">
+                      <p className="text-muted-foreground">
+                        The README documents login credentials in <code>{plan.credentials_env_filename}</code>.
+                        Fill these in to write/update that file before this run — leave both blank to keep
+                        whatever&apos;s already saved there.
+                      </p>
+                      <div className="flex flex-wrap gap-3">
+                        <div className="flex flex-1 flex-col gap-2">
+                          <Label htmlFor="email">Email</Label>
+                          <Input id="email" name="email" type="email" autoComplete="off" />
+                        </div>
+                        <div className="flex flex-1 flex-col gap-2">
+                          <Label htmlFor="password">Password</Label>
+                          <Input id="password" name="password" type="password" autoComplete="off" />
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )}
                 <div className="flex items-start gap-2">
                   <Checkbox id="confirm" name="confirm" required />
                   <Label htmlFor="confirm" className="text-sm font-normal">

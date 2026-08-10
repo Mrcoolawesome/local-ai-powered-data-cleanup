@@ -174,6 +174,19 @@ prose before or after, no markdown code fence — with these fields:
   this scraper and interpret its output.
 - concerns: string, only if confidence is "low" — explain what's ambiguous or missing
   rather than guessing at run_command or expected_output_pattern.
+- credentials_env_filename: string or null — the exact filename (e.g. ".env",
+  "housecallpro.env") the README says holds this scraper's login email/password, read
+  from the scraper's own working directory. null if the README documents no such file
+  (e.g. the scraper uses some other auth method, or none).
+- credentials_env_template: string or null — ONLY set if credentials_env_filename is
+  set. The exact file content the README documents for that file, verbatim (variable
+  names, one per line, KEY=value format) EXCEPT replace the actual email value with the
+  literal placeholder token {{EMAIL}} and the actual password value with {{PASSWORD}}.
+  Only include lines for fields the README actually documents as required — do not
+  invent additional variables or default values for anything else. If the README's
+  example uses different names than "EMAIL"/"PASSWORD" for the credential fields (e.g.
+  "HCP_EMAIL"), use the real names from the README on the left of "=", still with the
+  {{EMAIL}}/{{PASSWORD}} placeholders on the right.
 
 If the README doesn't clearly document something, do not invent it — reflect that
 uncertainty in confidence/concerns instead."""

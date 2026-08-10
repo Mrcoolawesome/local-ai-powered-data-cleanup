@@ -135,11 +135,32 @@ export type ScraperPlan = {
   watch_signals: string[];
   confidence: "high" | "medium" | "low";
   concerns?: string;
+  // Extracted from the README, not hardcoded — different scrapers use
+  // different filenames/variable names for the same email/password pair.
+  // Both null if the README documents no such credentials file.
+  credentials_env_filename?: string | null;
+  credentials_env_template?: string | null;
 };
 
 export function planScraperCommand(readmeRelativePath: string) {
   return postJson<{ plan: ScraperPlan; raw_response: string }>("/scraper/plan", {
     readme_relative_path: readmeRelativePath,
+  });
+}
+
+export function writeScraperCredentials(params: {
+  scraperDirRelativePath: string;
+  envFilename: string;
+  envTemplate: string;
+  email: string;
+  password: string;
+}) {
+  return postJson<{ status: string }>("/scraper/credentials", {
+    scraper_dir_relative_path: params.scraperDirRelativePath,
+    env_filename: params.envFilename,
+    env_template: params.envTemplate,
+    email: params.email,
+    password: params.password,
   });
 }
 

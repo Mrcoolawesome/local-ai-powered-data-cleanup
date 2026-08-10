@@ -62,9 +62,16 @@ watch_signals (stdout patterns indicating success/failure/rate-limiting, as
 documented in the README), and a confidence field. If the README does not
 clearly document how to run the scraper or interpret its output, set
 confidence: "low" and explain why in a `concerns` field instead of guessing.
+Also extract credentials_env_filename/credentials_env_template — the exact
+filename and KEY=value format the README documents for this scraper's login
+email/password, with {{EMAIL}}/{{PASSWORD}} placeholders standing in for the
+real values, using the README's own variable names rather than an assumed
+"EMAIL"/"PASSWORD". Both null if the README documents no such file.
 ```
 
 JSON output (not code) here because the plan is consumed by orchestration logic that decides whether to sandbox-execute it, not executed directly — and because guessing a command from an ambiguous README is exactly the failure mode ([03-ingestion-and-scrapers.md](./03-ingestion-and-scrapers.md)'s "README drift") that `confidence`/`concerns` exists to surface to a human instead of silently running something wrong.
+
+The credentials extraction is read-only into the *plan* — the model never sees or handles the actual email/password values themselves, only the shape of the file they belong in. Those real values only ever exist in the Next.js form submission and ai-service's `write_credentials_env` (`apps/ai-service/app/scraper_fs.py`), matching the "the model never sees plaintext credential values" principle in [06-security-sandboxing.md](./06-security-sandboxing.md).
 
 ## System prompt: chat / iterative refinement
 

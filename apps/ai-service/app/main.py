@@ -28,7 +28,7 @@ from app.prompting import (
 )
 from app.sandbox import SandboxError, run_cleaning
 from app.schema_inference import SchemaInferenceError, compute_summary_stats, get_current_columns, infer_schema
-from app.scraper_fs import ScraperFsError, read_readme
+from app.scraper_fs import ScraperFsError, read_readme, write_credentials_env
 from app.scraper_sandbox import ScraperSandboxError, list_files_modified_since, run_scraper
 
 app = FastAPI(title="data-cleanup ai-service")
@@ -429,6 +429,38 @@ async def scraper_plan(req: ScraperPlanRequest):
         raise HTTPException(status_code=502, detail=str(e)) from e
 
     return {"plan": plan, "raw_response": raw_response, "base_url": url, "model": model}
+
+
+class WriteScraperCredentialsRequest(BaseModel):
+    scraper_dir_relative_path: str
+    env_filename: str
+    env_template: str
+    email: str
+    password: str
+
+
+@app.post("/scraper/credentials")
+async def write_scraper_credentials(req: WriteScraperCredentialsRequest):
+    """Writes a scraper's login email/password into its own directory in
+    the filename/format its own README documents (credentials_env_filename/
+    credentials_env_template from /scraper/plan) — called right before
+    /scraper/execute so a saved session/.env is in place before the run,
+    same "orchestrator mounts the credential file, the model never sees
+    plaintext values" principle as every other scraper credential handling
+    in this app (docs/06-security-sandboxing.md). Nothing here is logged.
+    """
+    try:
+        await run_in_threadpool(
+            write_credentials_env,
+            req.scraper_dir_relative_path,
+            req.env_filename,
+            req.env_template,
+            req.email,
+            req.password,
+        )
+    except ScraperFsError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    return {"status": "ok"}
 
 
 class ExecuteScraperRequest(BaseModel):
