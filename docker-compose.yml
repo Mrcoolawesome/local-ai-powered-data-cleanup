@@ -125,6 +125,36 @@ services:
       # real tradeoff this involves.
       - /var/run/docker.sock:/var/run/docker.sock
 
+  # Phase 6 (docs/07-zoom-bot.md) — native Zoom Meeting SDK join + screen
+  # share, productionized from spikes/zoom-presentation-bot. Profile-gated
+  # (never starts on a plain `docker compose up`): it needs the proprietary
+  # SDK bind-mounted, real Zoom credentials, and a meeting to join — none of
+  # which the rest of the stack (web/ai-service/scraper testing) needs. Run
+  # it explicitly with `docker compose --profile zoom-bot up zoom-bot`.
+  zoom-bot:
+    profiles: ["zoom-bot"]
+    build:
+      context: ./apps/zoom-bot-service
+    # No `restart: unless-stopped` here unlike the always-on services above
+    # — a dropped meeting connection means start.sh's whole boot sequence
+    # (fresh Xvfb, fresh Chromium, fresh join) reruns on container restart,
+    # which is the v1 "reconnect" strategy documented in join_and_share.cpp;
+    # opt into `restart: on-failure` explicitly per-deployment once that
+    # tradeoff has actually been exercised against a real dropped call.
+    shm_size: "512m"
+    environment:
+      PRESENT_URL: ${ZOOM_BOT_PRESENT_URL}
+      ZOOM_SDK_KEY: ${ZOOM_SDK_KEY}
+      ZOOM_SDK_SECRET: ${ZOOM_SDK_SECRET}
+      ZOOM_MEETING_NUMBER: ${ZOOM_MEETING_NUMBER}
+      ZOOM_MEETING_PASSWORD: ${ZOOM_MEETING_PASSWORD}
+      ZOOM_SDK_DIR: /app/zoom-sdk
+    volumes:
+      # Bind-mounted, not COPYed into the image at build time — see
+      # apps/zoom-bot-service/Dockerfile's header comment for why (never
+      # redistribute the proprietary SDK inside a built image).
+      - ./spikes/zoom-presentation-bot/zoom-sdk:/app/zoom-sdk
+
 volumes:
   postgres-data:
   # ./storage is a bind mount (not a named volume) per docs/11-deployment.md

@@ -65,7 +65,7 @@ Phased so each phase produces something runnable/demoable, and so the highest-ri
 
 - Only starts once Phase 0's Zoom spike has a validated approach (native or fallback) — done, native path validated.
 - `/present/[sessionId]` route — done, tested end-to-end (browser → `PresentationSession` → CSV/attachment render). See `docs/07-zoom-bot.md`'s "Phase 6 build status."
-- Zoom Bot Service productionized from the spike — not started yet; needs the project owner for the final live-meeting validation, same as Phase 0's spike did.
+- Zoom Bot Service productionized from the spike — done and compiled for real against the actual SDK, full orchestration (Xvfb/Chromium/window-detection/build) verified end-to-end with dummy credentials; a real segfault-on-auth-failure bug was found and fixed this way. Only the actual live-meeting join with real credentials remains, and needs the project owner the same way Phase 0's spike did. See `docs/07-zoom-bot.md`'s "Phase 6 build status."
 
 ## Phase 7 — Raspberry Pi Controller
 
