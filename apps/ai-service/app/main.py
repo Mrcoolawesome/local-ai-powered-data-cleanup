@@ -389,6 +389,7 @@ async def chat_question(req: ChatQuestionRequest):
 
 class ScraperPlanRequest(BaseModel):
     readme_relative_path: str
+    runtime: str
     base_url: str | None = None
     model: str | None = None
 
@@ -418,7 +419,14 @@ async def scraper_plan(req: ScraperPlanRequest):
     # needs no new request field.
     scraper_dir = os.path.dirname(req.readme_relative_path)
     example_file = await run_in_threadpool(find_credentials_example_file, scraper_dir)
-    user_content = readme_content
+    # Found for real running an actual scraper: a README's "Scripts" list
+    # often gives bare filenames (e.g. "housecallpro-exporter.mjs --only
+    # invoices") with no interpreter — a human reader infers "run this with
+    # node" from context the model doesn't reliably have. Stating the
+    # scraper's own already-registered runtime explicitly (not left for the
+    # model to guess from the README's prose alone) is what
+    # build_scraper_planning_prompt's instruction below relies on.
+    user_content = f"THIS SCRAPER'S REGISTERED RUNTIME: {req.runtime}\n\n{readme_content}"
     if example_file:
         example_name, example_content = example_file
         user_content += (

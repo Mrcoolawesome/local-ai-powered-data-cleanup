@@ -51,7 +51,7 @@ export default async function ScraperDetailPage({
   let planError: string | null = null;
   if (showPlan) {
     try {
-      const result = await planScraperCommand(def.readmePath);
+      const result = await planScraperCommand(def.readmePath, def.runtime);
       plan = result.plan;
     } catch (e) {
       planError = e instanceof AiServiceError ? e.message : "Planning failed.";

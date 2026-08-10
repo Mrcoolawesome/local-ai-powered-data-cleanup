@@ -155,9 +155,10 @@ export type ScraperPlan = {
   credentials_env_template?: string | null;
 };
 
-export function planScraperCommand(readmeRelativePath: string) {
+export function planScraperCommand(readmeRelativePath: string, runtime: "PYTHON" | "NODE") {
   return postJson<{ plan: ScraperPlan; raw_response: string }>("/scraper/plan", {
     readme_relative_path: readmeRelativePath,
+    runtime,
   });
 }
 
