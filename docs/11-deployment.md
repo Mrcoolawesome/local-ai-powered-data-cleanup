@@ -8,16 +8,16 @@
 docker-compose.yml
   ├─ postgres        — official postgres image, named volume for data
   ├─ migrator         — runs `prisma migrate deploy` once, exits (see below)
-  ├─ web             — Next.js app (Prisma client lives here)
+  ├─ web             — Next.js app + WS control server (Prisma client lives here)
   ├─ ai-service       — FastAPI orchestration service
-  └─ (zoom-bot        — Phase 6, not part of Phase 1's compose file yet;
-       added once the presentation-route + WebSocket pieces exist to share)
+  └─ zoom-bot         — Phase 6, profile-gated (docs/07-zoom-bot.md)
 ```
 
 - **`postgres`** — standard image, a named volume (`postgres-data`) for durability across `docker compose down`/`up` cycles. Not exposed outside the Compose network by default — only `web`/`migrator` need to reach it.
-- **`migrator`** — built from the same Dockerfile as `web` but stopped at its `builder` stage (full `node_modules` + Prisma CLI + the `prisma/` folder), so it can run `prisma migrate deploy` before `web` starts. `web`'s own image is the trimmed Next.js `output: "standalone"` runtime and deliberately does **not** carry the Prisma CLI or migration files — keeping migrations in a separate one-shot service avoids bloating the thing that's actually running 24/7. `web` waits on `migrator` finishing successfully (`depends_on: condition: service_completed_successfully`).
-- **`web`** — the Next.js app. Owns the Prisma client and all Postgres access (per [01-architecture.md](./01-architecture.md)'s "one ORM boundary" decision). Exposed on a host port for browser access.
+- **`migrator`** — built from the same Dockerfile as `web` but stopped at its `builder` stage (full `node_modules` + Prisma CLI + the `prisma/` folder), so it can run `prisma migrate deploy` before `web` starts.
+- **`web`** — the Next.js app, plus a second process (`ws-server.ts`, `docker-entrypoint.sh`) in the *same* container for the Pi controller's realtime channel (docs/08-raspberry-pi-controller.md). **No longer a trimmed `output: "standalone"` runtime** — that changed in Phase 7: `ws-server.ts` runs via `tsx` alongside Next, and neither `tsx`/`ws` nor a Prisma CLI-carrying `node_modules` are things Next's own build tracing would include in a standalone bundle, since tracing only follows what the Next app's *own* request handling imports. The pragmatic fix was to stop using the standalone bundle at runtime and just ship the full `node_modules` from the `builder` stage instead — simpler and more robust than hand-copying the specific transitive dependencies `tsx`/`ws` need, at the cost of a larger image than the old standalone approach. Right tradeoff for an internal tool at this scale; revisit if image size ever actually matters. Owns the Prisma client and all Postgres access (per [01-architecture.md](./01-architecture.md)'s "one ORM boundary" decision). Exposed on two host ports: 3000 for the app, 3001 for the WS server — see `apps/web/ws-server.ts`'s header comment for why they have to share a container/hostname.
 - **`ai-service`** — the FastAPI service. Talks to `devin-server:11434` (configurable, see below) for Ollama, and to `web`'s internal API for anything it needs from Postgres (it never queries Postgres directly). Not exposed to the host — only `web` calls it, over the Compose-internal network.
+- **`zoom-bot`** — profile-gated (`docker compose --profile zoom-bot up zoom-bot`), never starts on a plain `docker compose up`. See [07-zoom-bot.md](./07-zoom-bot.md).
 
 ## Local file storage
 

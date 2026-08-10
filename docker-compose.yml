@@ -55,6 +55,11 @@ services:
       SCRAPERS_ROOT: /app/scrapers
     ports:
       - "3000:3000"
+      # WS control server (docs/08-raspberry-pi-controller.md) — same
+      # container as the Next app on purpose, see apps/web/ws-server.ts's
+      # header comment; published here the same way port 3000 is so a Pi
+      # controller or host browser can reach it at the same hostname.
+      - "3001:3001"
     volumes:
       - ./storage:/app/storage
       # Real scraper installs (docs/03-ingestion-and-scrapers.md), starting

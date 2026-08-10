@@ -67,11 +67,11 @@ Phased so each phase produces something runnable/demoable, and so the highest-ri
 - `/present/[sessionId]` route — done, tested end-to-end (browser → `PresentationSession` → CSV/attachment render). See `docs/07-zoom-bot.md`'s "Phase 6 build status."
 - Zoom Bot Service productionized from the spike — done and compiled for real against the actual SDK, full orchestration (Xvfb/Chromium/window-detection/build) verified end-to-end with dummy credentials; a real segfault-on-auth-failure bug was found and fixed this way. Only the actual live-meeting join with real credentials remains, and needs the project owner the same way Phase 0's spike did. See `docs/07-zoom-bot.md`'s "Phase 6 build status."
 
-## Phase 7 — Raspberry Pi Controller
+## Phase 7 — Raspberry Pi Controller — mostly done
 
-- WebSocket server for `PresentationSession` control ([08-raspberry-pi-controller.md](./08-raspberry-pi-controller.md)).
-- Minimal Pi-side React kiosk UI.
-- End-to-end test: Pi button press → visible change in an actual Zoom share.
+- WebSocket server for `PresentationSession` control ([08-raspberry-pi-controller.md](./08-raspberry-pi-controller.md)) — done, tested end-to-end (Playwright: control-tab button tap → presentation-tab DOM update, no navigation, confirmed AuditLog row).
+- Minimal Pi-side React kiosk UI — done as a web route (`/control/[sessionId]`), served by the main Next.js app per the doc's own preference for one codebase. Not yet done: pointing an actual physical Raspberry Pi's browser at it in kiosk mode — a hardware/deployment step, no dev Pi available in this environment.
+- End-to-end test: Pi button press → visible change in an actual Zoom share — blocked on Phase 6's remaining live-meeting validation (needs the project owner); the web-side half of this (button press → presentation route updates live) is proven, only the "via a real Zoom share" leg remains, and it's the same live-meeting dependency Phase 6 already has.
 
 ## Phase 8 — Hardening & Polish
 

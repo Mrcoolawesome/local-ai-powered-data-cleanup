@@ -25,8 +25,22 @@ RUN pnpm build
 FROM base AS runner
 WORKDIR /app
 ENV NODE_ENV=production
+# Full node_modules here (not .next/standalone's own pruned copy) — ws-server.ts
+# (docs/08-raspberry-pi-controller.md) runs as a second process alongside
+# Next itself via `tsx`, and neither `tsx` nor `ws` are things Next's own
+# build tracing would include in a standalone bundle, since it only traces
+# what the Next app's own request handling actually imports.
+COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/public ./public
-COPY --from=builder /app/.next/standalone ./
-COPY --from=builder /app/.next/static ./.next/static
-EXPOSE 3000
-CMD ["node", "server.js"]
+COPY --from=builder /app/.next ./.next
+COPY --from=builder /app/next.config.ts ./
+COPY --from=builder /app/tsconfig.json ./
+COPY --from=builder /app/package.json ./
+COPY --from=builder /app/lib ./lib
+COPY --from=builder /app/prisma ./prisma
+COPY --from=builder /app/generated ./generated
+COPY --from=builder /app/ws-server.ts ./
+COPY docker-entrypoint.sh ./
+RUN chmod +x docker-entrypoint.sh
+EXPOSE 3000 3001
+CMD ["./docker-entrypoint.sh"]

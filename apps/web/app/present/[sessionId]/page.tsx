@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { readStorageFileText } from "@/lib/storage";
 import { parseCsv } from "@/lib/csv";
+import { PresentLiveReload } from "@/components/present-live-reload";
 
 // Deliberately unauthenticated (docs/07-zoom-bot.md) — this route is
 // rendered inside the Zoom Bot Service's headless Chromium, which has no
@@ -10,11 +11,11 @@ import { parseCsv } from "@/lib/csv";
 // shows to other users) is the route's authorization — same pattern as
 // app/api/attachments/[id]/route.ts. Read-only: this route never mutates
 // anything, so the tradeoff is "knowing a session id shows its current
-// view," not broader account access. No revalidation loop of its own yet
-// — Phase 7's WebSocket layer (docs/08-raspberry-pi-controller.md) is what
-// replaces "reload to see a view change" with a live in-place update; this
-// phase's route intentionally still needs a reload to pick up a new
-// activeView, stated here rather than silently assumed away.
+// view," not broader account access. Live updates come from
+// PresentLiveReload (ws-server.ts, docs/08-raspberry-pi-controller.md) —
+// it calls router.refresh() on any change, which re-renders this Server
+// Component in place, no full page reload (a reload would drop or
+// visibly glitch the native Zoom share).
 export default async function PresentPage({ params }: { params: Promise<{ sessionId: string }> }) {
   const { sessionId } = await params;
 
@@ -29,6 +30,8 @@ export default async function PresentPage({ params }: { params: Promise<{ sessio
 
   return (
     <main className="h-dvh w-dvw overflow-auto bg-white p-6 text-black">
+      <PresentLiveReload sessionId={sessionId} />
+
       {session.activeViewKind === "DATASET" && session.activeDataset && (
         <DatasetView datasetId={session.activeDataset.id} filePath={session.activeDataset.filePath} name={session.activeDataset.name} />
       )}
