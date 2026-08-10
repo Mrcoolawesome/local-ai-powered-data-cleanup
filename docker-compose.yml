@@ -53,6 +53,15 @@ services:
       AI_SERVICE_URL: http://ai-service:8000
       STORAGE_ROOT: /app/storage
       SCRAPERS_ROOT: /app/scrapers
+      # docker-compose.yml's ${VAR} interpolation reads .env for values
+      # used INSIDE this file, but doesn't automatically forward them into
+      # a container's own process environment — found the hard way running
+      # `docker compose exec web ... prisma/seed.ts` for a real deployment
+      # and seeing it report these as unset despite being in .env. Explicit
+      # passthrough needed for prisma/seed.ts (run manually, docs/11-deployment.md)
+      # to actually see them.
+      SEED_USER_EMAIL: ${SEED_USER_EMAIL}
+      SEED_USER_PASSWORD: ${SEED_USER_PASSWORD}
       # The client-side WS URL (app/present/[sessionId]/page.tsx,
       # app/control/[sessionId]/page.tsx) needs the HOST-published port,
       # not the container-internal one (ws-server.ts always binds 3001
