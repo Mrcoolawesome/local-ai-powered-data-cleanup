@@ -53,6 +53,10 @@ ai-service:
   ```
   Deliberately not run automatically on every boot — `seed.ts` upserts by email, so an unattended rerun on every restart would silently overwrite a password changed through some future in-app flow with whatever's still sitting in `.env`.
 
+## Container user
+
+`web` and `ai-service` run as `${APP_UID:-1000}:${APP_GID:-1000}`, not root — found necessary while testing Phase 2's file upload: a root container writing into the bind-mounted `./storage` produces root-owned files the deploying host user can't delete or modify without `sudo`, which defeats the entire point of using a bind mount ("directly inspectable/backuppable from the host," see above). Set `APP_UID`/`APP_GID` in `.env` if the deploying user's `id -u`/`id -g` isn't 1000. This is the same host/container UID-mismatch class of bug already found once in `spikes/docker-sandbox` — worth remembering as a pattern, not just a one-off fix, anywhere else a container writes into a bind mount.
+
 ## Starting and stopping
 
 ```bash

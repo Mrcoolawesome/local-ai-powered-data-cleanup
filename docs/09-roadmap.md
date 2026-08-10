@@ -23,10 +23,13 @@ Phased so each phase produces something runnable/demoable, and so the highest-ri
 
 ## Phase 2 — File Ingestion & Rules Config
 
-- Manual file upload UI + disk storage pattern + `UploadedFile` records.
-- `TargetSchema` + `CleaningRule` UI (create/edit), seeded from the concrete column sets in [10-target-schema-reference.md](./10-target-schema-reference.md).
-- Required-vs-structurally-expected-empty distinction on `TargetSchema.columns` (see that doc's Design implication) so the Phase 3 audit report doesn't drown real gaps in expected sparsity.
-- Prisma models for `TargetSchema`, `CleaningRule`, `Dataset`.
+**Status: done, verified against the real running stack** — not just built: a script exercising the exact Prisma calls the UI's Server Actions use (create-from-template, add/remove column, add/remove rule, upload + save-to-disk) ran against the live containerized Postgres and bind-mounted storage, and the resulting pages were fetched over real HTTP with an authenticated session cookie to confirm the data actually renders (schema list showing correct column counts, detail page showing the right columns after edits, upload page showing the uploaded file/dataset).
+
+- [x] Manual file upload UI + disk storage pattern + `UploadedFile` records — `lib/storage.ts` writes into the bind-mounted `./storage`, relative paths stored in the DB so both `web` and the future `ai-service` sandbox execution resolve them identically.
+- [x] `TargetSchema` + `CleaningRule` UI (create/edit), seeded from the concrete column sets in [10-target-schema-reference.md](./10-target-schema-reference.md) — Contacts/Jobs/Invoices templates to start (Memberships/Pricebook/Estimates deferred until there's a real use case exercising them, not built speculatively).
+- [x] Required-vs-structurally-expected-empty distinction on `TargetSchema.columns` (see that doc's Design implication) — two independent boolean flags (`required`, `structurallyOptional`), not one tri-state, so the Phase 3 audit report doesn't drown real gaps (e.g. `customer_phone`) in expected sparsity (e.g. `unit`).
+- [x] Prisma models for `TargetSchema`, `CleaningRule`, `UploadedFile`, `Dataset`, all per-user scoped per [02-data-model.md](./02-data-model.md)'s isolation model — every query checks `userId`, including a re-check before any child-row write (a schema/dataset id alone is never treated as proof of ownership).
+- **Found and fixed:** the same host/container UID-mismatch class of bug as `spikes/docker-sandbox` — `web`/`ai-service` now run as `${APP_UID:-1000}:${APP_GID:-1000}` instead of root, so uploaded files land owned by the deploying user, not root. See [11-deployment.md](./11-deployment.md)'s "Container user" section.
 
 ## Phase 3 — AI Cleaning Engine
 

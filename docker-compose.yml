@@ -37,10 +37,21 @@ services:
     build:
       context: ./apps/web
     restart: unless-stopped
+    # Runs as the deploying host user's own uid/gid rather than root — a
+    # real bug found and fixed while testing Phase 2's file upload: files
+    # written by a root container into the bind-mounted ./storage came out
+    # root-owned, un-deletable by the host user without sudo, defeating
+    # the "directly inspectable/backuppable from host" point of using a
+    # bind mount at all (docs/11-deployment.md). Same fix pattern already
+    # proven in spikes/docker-sandbox. Defaults to 1000:1000 (the common
+    # first-non-root-user uid/gid); override APP_UID/APP_GID in .env if
+    # the deploying user differs — see .env.example.
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
     environment:
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/data_cleanup
       AUTH_SECRET: ${AUTH_SECRET}
       AI_SERVICE_URL: http://ai-service:8000
+      STORAGE_ROOT: /app/storage
     ports:
       - "3000:3000"
     volumes:
@@ -53,6 +64,7 @@ services:
     build:
       context: ./apps/ai-service
     restart: unless-stopped
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
     environment:
       AI_SERVICE_DEFAULT_OLLAMA_BASE_URL: ${DEFAULT_OLLAMA_BASE_URL:-http://devin-server:11434}
     # devin-server is a Tailscale MagicDNS hostname (docs/11-deployment.md)

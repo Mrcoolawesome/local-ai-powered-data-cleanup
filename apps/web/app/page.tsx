@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { auth, signOut } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { AppNav } from "@/components/app-nav";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -50,6 +51,8 @@ export default async function Home() {
           </Button>
         </form>
       </div>
+
+      <AppNav current="home" />
 
       <Separator />
 

@@ -12,9 +12,6 @@ datasource db {
   provider = "postgresql"
 }
 
-// Phase 1 scope per docs/02-data-model.md: just enough to log in and
-// configure the Ollama endpoint. Everything else (TargetSchema, Dataset,
-// ScraperDefinition, ...) lands in later phases as those features are built.
 model User {
   id           String   @id @default(cuid())
   email        String   @unique
@@ -22,6 +19,10 @@ model User {
   passwordHash String
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+
+  targetSchemas TargetSchema[]
+  uploadedFiles UploadedFile[]
+  datasets      Dataset[]
 }
 
 // Singleton row (fixed id) rather than per-user: the Ollama endpoint is one
@@ -32,4 +33,100 @@ model Settings {
   ollamaBaseUrl String   @default("http://devin-server:11434")
   ollamaModel   String   @default("gemma4-e4b-262k:latest")
   updatedAt     DateTime @updatedAt
+}
+
+// Phase 2 per docs/02-data-model.md. Per-user, not shared — each user's
+// target shapes and rules only apply to their own datasets (isolation
+// model in docs/00-overview.md).
+//
+// `columns` shape (validated in TS at the API boundary via
+// lib/target-schema.ts, not enforceable in the DB): an array of
+//   { name: string, type: string, required: boolean,
+//     structurallyOptional: boolean, description: string }
+// `required` + `structurallyOptional` are deliberately two separate flags,
+// not one tri-state — per docs/10-target-schema-reference.md's Design
+// Implication, most "missing" data across every real sheet examined was
+// structurally expected (e.g. `unit` empty because most addresses aren't
+// multi-unit), not a genuine data-quality gap. Collapsing that into a
+// single "optional" flag would make the Phase 3 audit report unable to
+// tell "nobody filled this in and that's fine" apart from "this is
+// usually there and its absence here is worth a human's attention."
+model TargetSchema {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  entityType String
+  version    Int      @default(1)
+  columns    Json
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  cleaningRules CleaningRule[]
+  datasets      Dataset[]
+}
+
+// A single non-negotiable rule (docs/03: "Mobile and Landline columns must
+// combine into a single 'Phone' column"). `structured` mirrors the
+// {rule, description} shape spikes/ollama-prompting/build_prompt.py already
+// proved the LLM follows correctly — kept as loose Json rather than fully
+// normalized columns since different rules need different fields (a
+// combine-columns rule needs source column names; a normalize rule needs a
+// pattern) and forcing one rigid shape now would fight Phase 3's actual
+// prompt-builder code before it exists.
+model CleaningRule {
+  id             String   @id @default(cuid())
+  targetSchemaId String
+  targetSchema   TargetSchema @relation(fields: [targetSchemaId], references: [id], onDelete: Cascade)
+  rule           String
+  rawDescription String
+  structured     Json?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+enum FileSourceType {
+  MANUAL_UPLOAD
+  SCRAPER
+}
+
+enum FileStatus {
+  PENDING
+  CLEANED
+  ERROR
+}
+
+// A raw file on disk (docs/03-ingestion-and-scrapers.md). `filePath` is
+// relative to the shared /app/storage bind mount (docs/11-deployment.md)
+// so both `web` and `ai-service` resolve it the same way.
+model UploadedFile {
+  id               String         @id @default(cuid())
+  userId           String
+  user             User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  filePath         String
+  originalFilename String
+  sourceType       FileSourceType @default(MANUAL_UPLOAD)
+  status           FileStatus     @default(PENDING)
+  datasetId        String?
+  dataset          Dataset?       @relation(fields: [datasetId], references: [id])
+  createdAt        DateTime       @default(now())
+}
+
+// The logical, cleaned table the chat/audit UI and presentation view point
+// at (docs/02-data-model.md) — distinct from the raw UploadedFile(s) it
+// was derived from. `filePath`/`rowCount` are null until Phase 3's
+// cleaning pipeline actually produces cleaned output.
+model Dataset {
+  id             String        @id @default(cuid())
+  userId         String
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name           String
+  targetSchemaId String
+  targetSchema   TargetSchema  @relation(fields: [targetSchemaId], references: [id])
+  filePath       String?
+  rowCount       Int?
+  lastCleanedAt  DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  uploadedFiles UploadedFile[]
 }
