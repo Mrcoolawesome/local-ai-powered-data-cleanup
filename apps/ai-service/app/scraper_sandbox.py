@@ -137,6 +137,15 @@ def run_scraper(
     except Exception:
         timed_out = True
         container.kill()
+    # container.attrs is a snapshot from when the container object was
+    # created (i.e. just as it started) — docker-py never refreshes it on
+    # its own, so reading ExitCode without reload() first always reports
+    # the pre-run placeholder (0), regardless of how the run actually
+    # ended. Confirmed for real against the Docker API: every run was
+    # silently recorded as ExitCode 0 no matter what actually happened
+    # inside the container, which meant every scraper run in the UI showed
+    # status COMPLETED even on a crash.
+    container.reload()
     logs = container.logs().decode(errors="replace")
     exit_code = container.attrs.get("State", {}).get("ExitCode", -1)
     container.remove(force=True)
