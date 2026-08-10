@@ -129,4 +129,42 @@ model Dataset {
   updatedAt      DateTime      @updatedAt
 
   uploadedFiles UploadedFile[]
+  cleaningRuns  CleaningRun[]
+}
+
+enum CleaningRunStatus {
+  SUCCESS
+  FAILED
+}
+
+// One execution of generate-then-sandbox-execute (docs/04-ai-cleaning-and-audit.md).
+// `generatedScript` is kept even on failure — a bad generation is a
+// debuggable event, not just an opaque error (app/main.py's /clean/execute
+// in ai-service returns the code alongside a 422 for exactly this reason).
+model CleaningRun {
+  id              String            @id @default(cuid())
+  datasetId       String
+  dataset         Dataset           @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+  generatedScript String            @db.Text
+  status          CleaningRunStatus
+  sandboxLogs     String?           @db.Text
+  errorMessage    String?           @db.Text
+  startedAt       DateTime          @default(now())
+  finishedAt      DateTime?
+
+  auditReport AuditReport?
+}
+
+// Rendered from the sandbox's measured output per docs/04's "templated,
+// not a second free-form LLM call" — `summary` is the {report, measured}
+// JSON ai-service's sandbox.py computed from TargetSchema's
+// required/structurallyOptional flags, `contentMarkdown` is that same data
+// rendered into what the chat UI actually displays.
+model AuditReport {
+  id              String      @id @default(cuid())
+  cleaningRunId   String      @unique
+  cleaningRun     CleaningRun @relation(fields: [cleaningRunId], references: [id], onDelete: Cascade)
+  summary         Json
+  contentMarkdown String      @db.Text
+  createdAt       DateTime    @default(now())
 }

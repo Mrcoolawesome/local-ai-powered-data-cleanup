@@ -24,10 +24,10 @@ You are a Python/Pandas code generator embedded in a data-cleaning pipeline.
 OUTPUT CONTRACT (strict):
 - Respond with EXACTLY ONE fenced Python code block. No prose before or after.
 - The code must define a single function: clean(df: pd.DataFrame) -> pd.DataFrame
-- Do not read files, do not print except for a final summary dict assignment
-  to a variable named `report`, do not import anything beyond pandas/numpy/re/datetime.
-- Never fabricate data. If a required target column cannot be derived from the
-  available source columns, leave it null and record it in `report["unmapped_fields"]`.
+- Do not read files, do not print anything, do not import anything beyond
+  pandas/numpy/re/datetime.
+- Never fabricate data. If a required target column cannot be derived from
+  the available source columns, leave it null — do not invent a value.
 - Follow every rule in CLEANING RULES exactly — they are non-negotiable, not
   suggestions to weigh against your own judgment.
 
@@ -47,7 +47,7 @@ Generate the cleaning script.
 Key choices baked into this:
 - **A strict output contract** (one code block, one named function, no narration) is what makes "strictly output executable code, not commentary" enforceable — parse failures on the FastAPI side become an explicit retry-with-correction loop rather than best-effort scraping of the model's prose.
 - **Rules rendered from structured `CleaningRule` data**, not the user's raw English — keeps behavior deterministic across runs and avoids the model re-interpreting a rule slightly differently each time it's included in a prompt.
-- **A `report` dict returned alongside the cleaned DataFrame** is what feeds the audit report template in [04-ai-cleaning-and-audit.md](./04-ai-cleaning-and-audit.md) — the model is required to self-report what it couldn't map, and that claim is then checked against the sandbox's own execution stats (see Verification below).
+- **No `report` output from the model at all** — an earlier version of this contract asked for one; see "Verification, not blind trust" below for why that was dropped after two separate real failures, not kept as a should-fix-later note.
 
 ## System prompt: scraper command planning
 
@@ -70,13 +70,18 @@ JSON output (not code) here because the plan is consumed by orchestration logic 
 
 Includes: schema-level context (as above), the `CleaningRule`s, a short window of recent chat turns, and — critically — the intent classification result from [04-ai-cleaning-and-audit.md](./04-ai-cleaning-and-audit.md) already tells this prompt whether it's handling an edit, a question, or an audit, so this prompt doesn't have to re-decide that itself.
 
-## Verification, not blind trust
+## Verification, not blind trust — and why the model doesn't produce a `report` at all anymore
 
-The model's self-reported `report` dict (unmapped fields, rows it flagged) is a *claim*, not ground truth — always cross-check it against what the sandbox execution actually observed (actual null counts post-clean, actual row count delta) before it goes into an `AuditReport`. A quantized 4B-class model will occasionally under- or over-report what it did; the audit report the user reads should reflect measured reality, with the model's own commentary presented as commentary.
+The original design here asked the model to self-report unmapped fields as a `report` dict, with the express intent of cross-checking that claim against the sandbox's own measured stats before trusting it. In practice, that self-report turned out not to be worth collecting in the first place — not just unreliable, but a genuine source of broken generations:
 
-## Phase 0 spike status — RESULT: prompt design produces correct cleaning logic; harness needs one defensive accommodation
+- The [Phase 0 spike](../spikes/ollama-prompting/README.md) got `return cleaned_df, report` — a tuple, deviating from the documented `-> pd.DataFrame` signature.
+- A later live test against the real `/clean/generate` endpoint (Phase 3) got something worse: `report = {...}` followed later, in the same function, by `global report` — an actual Python `SyntaxError` ("name 'report' is assigned to before global declaration"), not merely a style deviation.
+
+Two independent failures of the same instruction, on two different real prompts, is enough to call this a model-size limitation rather than a wording problem to keep patching. The fix: **stop asking the model for a report at all.** The harness always has ground truth — `TargetSchema.columns`' `required`/`structurallyOptional` flags — so it computes the report itself from the actual output DataFrame (which required columns ended up null, whether structurally-optional columns being null is expected, actual row count) rather than trusting anything the model claims about its own output. This is strictly more reliable, not a workaround: the model was never going to reliably reason about which gaps are structurally expected anyway (see [10-target-schema-reference.md](./10-target-schema-reference.md)'s Design Implication) — that's exactly the kind of judgment the harness's access to `TargetSchema` metadata is already better positioned to make deterministically. See `apps/ai-service/app/sandbox.py` for where this report actually gets built.
+
+## Phase 0 spike status — RESULT: prompt design produces correct cleaning logic
 
 Spike lives in [`/spikes/ollama-prompting`](../spikes/ollama-prompting/README.md), run for real against `gemma4-e4b-262k:latest` and through the Docker sandbox spike.
 
 - **Correctness: 6/6 rows verified correct by hand** against three cleaning rules (phone preference/normalization, name combination, address joining) on a synthetic dirty dataset, including the one genuinely hard case (a row with no phone data in either source column) — the model correctly left the required field null rather than fabricating a value.
-- **Contract compliance gap, with a known fix:** the model consistently returned `(cleaned_df, report)` as a tuple instead of following the letter of the contract above (`clean(df) -> pd.DataFrame`, `report` left as a separately accessible variable) — a natural Python idiom the prompt's explicit instruction didn't fully suppress at this model size. **Do not rely on prompt wording alone to prevent this.** The orchestrator's execution harness (the fixed wrapper code that calls `clean(df)` inside the sandbox, described in "Verification" above) must accept both shapes: a bare DataFrame return, or a `(df, report)` tuple. This was implemented and confirmed working in the spike — see `harness_template.py`'s handling there for the exact pattern to carry into the real FastAPI implementation.
+- The tuple-return deviation found here is what eventually led to dropping the `report` requirement entirely in Phase 3 — see "Verification, not blind trust" above.

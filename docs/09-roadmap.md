@@ -33,10 +33,15 @@ Phased so each phase produces something runnable/demoable, and so the highest-ri
 
 ## Phase 3 — AI Cleaning Engine
 
-- FastAPI `/clean/generate` endpoint implementing the script-generation prompt from [05-llm-prompting.md](./05-llm-prompting.md).
-- Docker sandbox executor (productionizing the Phase 0 spike) wired to actually run generated scripts against uploaded files.
-- Audit report generation (templated from sandbox execution stats, not a second free-form LLM call) per [04-ai-cleaning-and-audit.md](./04-ai-cleaning-and-audit.md).
-- `CleaningRun` + `AuditReport` persistence.
+**Status: done, run for real against the live compose stack** — a verification script mirroring the exact Server Action logic ran the full chain (Next.js → ai-service `/schema/infer` → `/clean/execute` → real Ollama → real Docker sandbox → Prisma persistence) against a real file, and the resulting `CleaningRun`/`AuditReport`/`Dataset` rows and cleaned CSV on disk were all verified correct.
+
+- [x] FastAPI `/clean/generate` + `/clean/execute` endpoints implementing the script-generation prompt from [05-llm-prompting.md](./05-llm-prompting.md). **Real finding that changed the design:** two independent live generations broke trying to satisfy the original contract's `report` output (a tuple return, then an actual Python `SyntaxError` from misusing `global`) — dropped the `report` requirement from the model entirely; the harness now computes it from `TargetSchema`'s `required`/`structurallyOptional` flags instead. See [05-llm-prompting.md](./05-llm-prompting.md)'s "Verification, not blind trust."
+- [x] Docker sandbox executor (productionizing the Phase 0 spike) — `ai-service` launches sandbox containers as siblings of itself via the mounted host Docker socket (Docker-outside-of-Docker). **Three more real bugs found and fixed:**
+  - Embedding `TargetSchema` into the harness via `json.dumps()` produced JSON literals (`true`/`false`) inside what needs to be **Python** source — `repr()` instead.
+  - The Phase 0 spike's shell-script timeout (`timeout --signal=KILL` wrapping `docker run`) killed the CLI *client* but left the container itself running — found two containers still alive 12 hours after their spike test run. The SDK-based executor here calls `container.kill()` directly via the Docker API, confirmed (by deliberately forcing a timeout) to leave no orphaned container.
+  - `ai-service` running as non-root (Phase 2's UID fix) couldn't reach the Docker socket (`root:docker`, mode 660) — added it to the host's `docker` group via Compose's `group_add`, configurable as `DOCKER_GID` since that GID varies by machine.
+- [x] Audit report generation (templated from sandbox execution stats, not a second free-form LLM call) per [04-ai-cleaning-and-audit.md](./04-ai-cleaning-and-audit.md). **One more real bug, found via end-to-end testing with the full Contacts template against a narrower source file:** a required target column the model didn't produce *at all* was recorded in `unmapped_fields` but skipped by a `continue` before the required-field check ran — the report claimed "no required fields missing" while one was, in fact, entirely missing. Fixed to treat "absent" the same as "present but 100% null" for severity scoring.
+- [x] `CleaningRun` + `AuditReport` persistence, plus a real observed model failure (forgot `import re` despite using `re.sub`) that validated the error path: the sandbox error and full generated code both correctly surfaced to the UI for review rather than a silent/opaque failure.
 
 ## Phase 4 — Human-in-the-Loop Chat
 

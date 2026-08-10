@@ -25,7 +25,7 @@ Uploads, scraper output, and attachments live on a bind-mounted host directory (
 
 ## The sandbox-orchestration problem: `ai-service` needs to launch sibling containers
 
-This is the one real architectural tension containerizing `ai-service` introduces. [06-security-sandboxing.md](./06-security-sandboxing.md)'s design has `ai-service` launch a fresh Docker container per LLM-directed execution (cleaning script, scraper command) — proven out for real in the [Docker sandbox spike](../spikes/docker-sandbox/README.md). If `ai-service` itself now runs *inside* a container, it needs a way to launch those sibling sandbox containers.
+This is the one real architectural tension containerizing `ai-service` introduces. [06-security-sandboxing.md](./06-security-sandboxing.md)'s design has `ai-service` launch a fresh Docker container per LLM-directed execution (cleaning script, scraper command) — proven out for real in the [Docker sandbox spike](../spikes/docker-sandbox/README.md), and now built and verified for real in Phase 3 (`apps/ai-service/app/sandbox.py`).
 
 **Chosen approach: Docker-outside-of-Docker (DooD)** — mount the host's Docker socket into `ai-service`:
 
@@ -36,6 +36,11 @@ ai-service:
 ```
 
 `ai-service` then calls the host's own Docker daemon to launch sandbox containers as *siblings* of itself, not nested inside it. This is simpler and lighter than true Docker-in-Docker (which needs a nested daemon and loses the host's layer cache).
+
+**Two real problems this introduces, both hit and fixed while building Phase 3:**
+
+1. **Bind-mount sources must be HOST paths, not `ai-service`'s own container paths.** The daemon resolves them against the host filesystem — `ai-service` handing it `/app/storage/x` (a path that only means something inside `ai-service`'s own container) silently mounts nothing useful. Fixed with `AI_SERVICE_HOST_STORAGE_PATH` (`HOST_STORAGE_PATH` in `.env`) — the absolute host path of `./storage`, which `ai-service` uses to translate "a file I can see at `{storage_root}/x`" into the path the daemon actually needs.
+2. **A non-root `ai-service` can't reach a root-owned socket.** The Docker socket is `root:docker`, mode `660` — Phase 2's UID fix (running `ai-service` as `${APP_UID}:${APP_GID}` instead of root, to fix file-ownership on `./storage`) meant it could no longer touch `/var/run/docker.sock` at all (`PermissionError(13, 'Permission denied')` from `docker-py`'s `from_env()`). Fixed with Compose's `group_add`, adding the host's `docker` group (GID varies by machine — configurable as `DOCKER_GID` in `.env`, default `987`) as a supplementary group.
 
 **The real tradeoff, stated plainly:** mounting the Docker socket gives `ai-service` the ability to launch arbitrary containers with arbitrary mounts and privileges — which is effectively root-equivalent access to the host. The sandboxing model in `06-security-sandboxing.md` exists specifically to contain a compromised or buggy *generated script*; it does not, by itself, protect against `ai-service` *itself* being compromised (e.g., via a dependency vulnerability in the FastAPI service or its Python packages), since a compromised `ai-service` already has the socket. Mitigations:
 

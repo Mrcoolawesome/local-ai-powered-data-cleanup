@@ -25,11 +25,12 @@ Fix (in `run-sandboxed.sh`): pass `--user "$(id -u):$(id -g)"` at `docker run` t
 
 This is a real, easy-to-hit gotcha for anyone bind-mounting host directories into a fixed-non-root-uid container — worth remembering if `06-security-sandboxing.md`'s design gets implemented by someone who didn't see this spike.
 
-## What this doesn't cover yet
+## A second real issue, found later (Phase 3) — timeout kills the client, not always the container
 
-This spike validates the sandbox *mechanism* — file I/O, network isolation, timeout enforcement, read-only mounts. It does not yet validate:
-- The actual FastAPI service invoking this pattern programmatically (subprocess/Docker SDK calls instead of a shell script) — that's Phase 3 work.
-- Memory-limit enforcement under real pressure (a script that actually tries to allocate past `--memory=256m`) — the flag is set and trusted to work per Docker's own documented behavior, but not independently stress-tested here.
-- CPU-limit enforcement under real load — same caveat.
+Not caught by this spike's own tests at the time, but worth recording here since it's the same `infinite_loop.py` test run implicated: **the `timeout --signal=KILL` wrapper only guarantees the `docker run` CLI client process dies, not the container it started.** A killed client can't forward a signal to the container it was attached to. One of this spike's own test containers was found still running 12 hours after the fact during Phase 3 work — the client-side timeout measurement in the table above was real and correct, but nothing here checked whether the *container* actually stopped too.
 
-Those are worth a quick check during Phase 3 implementation, not blocking here since the core isolation properties (network, filesystem, timeout) are the ones with actual security consequences if wrong.
+If you reuse this shell-script pattern standalone, add a `docker ps --filter ancestor=data-cleanup-sandbox` check after a timeout-triggered run to confirm no orphan survived — don't trust the wrapper's own exit code alone. The production executor (`apps/ai-service/app/sandbox.py`, Phase 3) avoids this entirely by using the Docker SDK to call `container.kill()` directly against the API rather than shelling out through a killable CLI client — confirmed leak-free by deliberately forcing a timeout against it.
+
+## What this doesn't cover — now covered in Phase 3
+
+This spike validated the sandbox *mechanism* in isolation — file I/O, network isolation, timeout enforcement (with the above caveat), read-only mounts. `apps/ai-service/app/sandbox.py` is where that mechanism actually got wired into the real FastAPI service (Docker SDK instead of a shell script, Docker-outside-of-Docker host-path translation, the container-leak fix above). Not yet independently stress-tested anywhere: memory/CPU limits under real pressure — the flags are set and trusted per Docker's documented behavior, but a script that actually tries to exceed `--memory=256m` or burn more than `--cpus=1` hasn't been thrown at either implementation. Worth a check if resource-limit correctness ever becomes suspect, not blocking since network/filesystem/timeout are the properties with real security consequences if wrong.

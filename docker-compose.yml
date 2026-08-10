@@ -65,8 +65,16 @@ services:
       context: ./apps/ai-service
     restart: unless-stopped
     user: "${APP_UID:-1000}:${APP_GID:-1000}"
-    environment:
-      AI_SERVICE_DEFAULT_OLLAMA_BASE_URL: ${DEFAULT_OLLAMA_BASE_URL:-http://devin-server:11434}
+    # The Docker socket below is owned root:docker on the host with mode
+    # 660 — a non-root container (the fix two lines up) can't touch it
+    # without being a member of a group whose GID matches the host's
+    # `docker` group. Confirmed the hard way: ai-service crashed with
+    # `PermissionError(13, 'Permission denied')` from docker-py's
+    # from_env() until this was added. Find your host's GID with
+    # `getent group docker | cut -d: -f3`; override DOCKER_GID in .env if
+    # it isn't 987.
+    group_add:
+      - "${DOCKER_GID:-987}"
     # devin-server is a Tailscale MagicDNS hostname (docs/11-deployment.md)
     # — Docker's embedded DNS can't reliably resolve it from a container's
     # network namespace (confirmed: intermittently fails even pointed at
@@ -78,11 +86,26 @@ services:
     # IP directly in the app's Settings UI — no redeploy needed either way.
     extra_hosts:
       - "devin-server:${DEVIN_SERVER_TAILSCALE_IP}"
+    environment:
+      AI_SERVICE_DEFAULT_OLLAMA_BASE_URL: ${DEFAULT_OLLAMA_BASE_URL:-http://devin-server:11434}
+      AI_SERVICE_STORAGE_ROOT: /app/storage
+      # ai-service's own filesystem path (/app/storage) means nothing to
+      # the Docker daemon when it launches sandbox containers as siblings
+      # (Docker-outside-of-Docker, docs/11-deployment.md) — bind-mount
+      # sources are resolved by the daemon against the HOST filesystem,
+      # not ai-service's container filesystem. This is how ai-service
+      # translates "a file I can see at /app/storage/x" into "the host
+      # path the daemon needs to bind-mount that same file for a sibling
+      # container." Must be the absolute host path of ./storage below.
+      AI_SERVICE_HOST_STORAGE_PATH: ${HOST_STORAGE_PATH}
     volumes:
       - ./storage:/app/storage
-      # See docs/11-deployment.md's "sandbox-orchestration" section — this
-      # gets added in Phase 3 when ai-service actually needs to launch
-      # sandbox containers as siblings. Not needed yet, so not mounted yet.
+      # Docker-outside-of-Docker: ai-service launches sandbox containers
+      # (spikes/docker-sandbox's pattern) as siblings of itself via the
+      # host's own daemon, not nested inside itself — see
+      # docs/11-deployment.md's "sandbox-orchestration" section for the
+      # real tradeoff this involves.
+      - /var/run/docker.sock:/var/run/docker.sock
 
 volumes:
   postgres-data:
