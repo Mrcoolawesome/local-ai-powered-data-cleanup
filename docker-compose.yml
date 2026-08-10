@@ -174,10 +174,14 @@ services:
     shm_size: "512m"
     environment:
       PRESENT_URL: ${ZOOM_BOT_PRESENT_URL}
+      # The meeting ID/passcode are NOT here — start.sh fetches them per-
+      # session from the web app (GET /api/presentations/[id]/zoom-meeting)
+      # instead, since they're set through the UI at /presentations/[id],
+      # not a fixed deployment value. ZOOM_SDK_KEY/SECRET stay env vars
+      # since they're the same Marketplace app credentials for every
+      # meeting this app ever joins, unlike a specific meeting's ID.
       ZOOM_SDK_KEY: ${ZOOM_SDK_KEY}
       ZOOM_SDK_SECRET: ${ZOOM_SDK_SECRET}
-      ZOOM_MEETING_NUMBER: ${ZOOM_MEETING_NUMBER}
-      ZOOM_MEETING_PASSWORD: ${ZOOM_MEETING_PASSWORD}
       ZOOM_SDK_DIR: /app/zoom-sdk
     volumes:
       # Bind-mounted, not COPYed into the image at build time — see

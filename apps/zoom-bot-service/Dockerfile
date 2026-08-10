@@ -21,6 +21,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl-dev \
     fonts-liberation \
     procps \
+    # start.sh fetches the per-session Zoom meeting ID/passcode from the
+    # web app (GET /api/presentations/[id]/zoom-meeting) rather than a
+    # fixed .env value.
+    curl \
+    jq \
     # Transitive runtime deps of the SDK's bundled Qt6/libmeetingsdk.so —
     # not obvious from the SDK's own docs (spikes/zoom-presentation-bot/README.md).
     libatomic1 \

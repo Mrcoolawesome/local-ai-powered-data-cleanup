@@ -6,6 +6,8 @@ import { prisma } from "@/lib/prisma";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import {
   Select,
@@ -34,6 +36,27 @@ export default async function PresentationDetailPage({ params }: { params: Promi
       include: { scraperDefinition: true },
     }),
   ]);
+
+  async function setZoomMeeting(formData: FormData) {
+    "use server";
+    const session = await auth();
+    if (!session?.user) redirect("/login");
+
+    const zoomMeetingId = (formData.get("zoomMeetingId") as string).trim();
+    const zoomMeetingPassword = (formData.get("zoomMeetingPassword") as string).trim();
+    // Zoom meeting numbers are numeric (join_and_share.cpp passes this
+    // straight to std::stoull) — reject early with a clear error rather
+    // than letting the Zoom Bot Service crash on a bad value later.
+    if (zoomMeetingId && !/^\d+$/.test(zoomMeetingId)) {
+      throw new Error("Meeting ID must be numeric — copy it from the Zoom invite, no spaces or dashes.");
+    }
+
+    await prisma.presentationSession.updateMany({
+      where: { id, userId: session.user.id },
+      data: { zoomMeetingId: zoomMeetingId || null, zoomMeetingPassword: zoomMeetingPassword || null },
+    });
+    revalidatePath(`/presentations/${id}`);
+  }
 
   async function showDataset(formData: FormData) {
     "use server";
@@ -95,11 +118,46 @@ export default async function PresentationDetailPage({ params }: { params: Promi
           <Link href={`/present/${presentationSession.id}`} target="_blank" className="underline">
             Open the presentation route
           </Link>{" "}
-          (what the Zoom bot loads — reload to see a new view, until Phase 7&apos;s WebSocket layer lands)
+          (what the Zoom bot loads — updates live, no reload needed)
         </p>
       </div>
 
       <Separator />
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Zoom meeting</CardTitle>
+          <CardDescription>
+            The Zoom Bot Service (docs/07-zoom-bot.md) reads this per-session at startup instead of a fixed .env
+            value — set it here before starting the bot for this presentation.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form action={setZoomMeeting} className="flex flex-wrap items-end gap-3">
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="zoomMeetingId">Meeting ID</Label>
+              <Input
+                id="zoomMeetingId"
+                name="zoomMeetingId"
+                inputMode="numeric"
+                placeholder="123 4567 8901"
+                defaultValue={presentationSession.zoomMeetingId ?? ""}
+              />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="zoomMeetingPassword">Passcode</Label>
+              <Input
+                id="zoomMeetingPassword"
+                name="zoomMeetingPassword"
+                type="password"
+                autoComplete="off"
+                defaultValue={presentationSession.zoomMeetingPassword ?? ""}
+              />
+            </div>
+            <Button type="submit">Save</Button>
+          </form>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

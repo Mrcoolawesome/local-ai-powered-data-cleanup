@@ -313,18 +313,25 @@ enum PresentationSessionStatus {
 // grouping — matches the same v1 gap noted on Attachment.jobId/customerId
 // in docs/03-ingestion-and-scrapers.md (no per-platform path parser yet).
 model PresentationSession {
-  id                 String                     @id @default(cuid())
-  userId             String
-  user               User                       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  zoomMeetingId      String?
-  status             PresentationSessionStatus  @default(IDLE)
-  activeViewKind     PresentationViewKind?
-  activeDatasetId    String?
-  activeDataset      Dataset?                   @relation(fields: [activeDatasetId], references: [id])
-  activeScraperRunId String?
-  activeScraperRun   ScraperRun?                @relation(fields: [activeScraperRunId], references: [id])
-  createdAt          DateTime                   @default(now())
-  updatedAt          DateTime                   @updatedAt
+  id                  String                    @id @default(cuid())
+  userId              String
+  user                User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Set per-session through /presentations/[id] (not .env — docs/07-zoom-bot.md:
+  // a meeting number/passcode is a per-presentation fact, not a deployment
+  // secret like ZOOM_SDK_KEY/ZOOM_SDK_SECRET, which stay in .env since
+  // they're the same for every meeting this app ever joins). The Zoom Bot
+  // Service fetches both at startup via GET /api/presentations/[id]/zoom-meeting
+  // rather than taking them as container env vars.
+  zoomMeetingId       String?
+  zoomMeetingPassword String?
+  status              PresentationSessionStatus @default(IDLE)
+  activeViewKind      PresentationViewKind?
+  activeDatasetId     String?
+  activeDataset       Dataset?                  @relation(fields: [activeDatasetId], references: [id])
+  activeScraperRunId  String?
+  activeScraperRun    ScraperRun?               @relation(fields: [activeScraperRunId], references: [id])
+  createdAt           DateTime                  @default(now())
+  updatedAt           DateTime                  @updatedAt
 
   @@index([userId])
 }

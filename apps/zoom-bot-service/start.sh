@@ -14,7 +14,13 @@
 #      /present/[sessionId] has no unique per-session title, and a title
 #      match would be a needless coupling to page content anyway, since
 #      Chromium is deliberately the only GUI application running here.
-#   4. Compute the ZOOM_SHARE_X_WINDOW_HANDLE string StartAppShare expects
+#   4. Fetch the meeting ID/passcode for this session from the web app
+#      (GET /api/presentations/[id]/zoom-meeting) rather than a fixed
+#      .env value — a meeting number is a per-presentation fact set
+#      through the UI (app/presentations/[id]/page.tsx), not a deployment
+#      secret like ZOOM_SDK_KEY/ZOOM_SDK_SECRET, which stay in .env since
+#      they're the same for every meeting this app ever joins.
+#   5. Compute the ZOOM_SHARE_X_WINDOW_HANDLE string StartAppShare expects
 #      and exec the compiled zoom_bot_service binary in the foreground, so
 #      Docker's own process supervision (PID 1, restart policy, SIGTERM on
 #      `docker stop`) governs this service's lifecycle directly rather than
@@ -25,8 +31,31 @@ set -euo pipefail
 : "${PRESENT_URL:?PRESENT_URL must be set — e.g. http://web:3000/present/<sessionId>}"
 : "${ZOOM_SDK_KEY:?ZOOM_SDK_KEY must be set}"
 : "${ZOOM_SDK_SECRET:?ZOOM_SDK_SECRET must be set}"
-: "${ZOOM_MEETING_NUMBER:?ZOOM_MEETING_NUMBER must be set}"
-: "${ZOOM_MEETING_PASSWORD:?ZOOM_MEETING_PASSWORD must be set}"
+
+# The session id is PRESENT_URL's own last path segment — no separate env
+# var needed to track "which session," since PRESENT_URL already has to
+# name it.
+SESSION_ID="${PRESENT_URL##*/}"
+WEB_BASE_URL="${PRESENT_URL%/present/*}"
+
+echo "== Fetching Zoom meeting ID/passcode for session ${SESSION_ID} =="
+# No `curl -f` here — found the hard way that it suppresses the response
+# body on a 4xx/5xx status, which is exactly when the API returns a JSON
+# `{"error": "..."}` body worth showing the operator (e.g. no meeting ID
+# set yet). A transport-level failure (connection refused, DNS) still
+# produces an empty/non-JSON body, caught separately by the jq parse below.
+ZOOM_MEETING_JSON=$(curl -s "${WEB_BASE_URL}/api/presentations/${SESSION_ID}/zoom-meeting")
+if [ -z "${ZOOM_MEETING_JSON}" ] || ! echo "${ZOOM_MEETING_JSON}" | jq -e . >/dev/null 2>&1; then
+  echo "Could not reach ${WEB_BASE_URL}/api/presentations/${SESSION_ID}/zoom-meeting — is the web service up and PRESENT_URL correct?" >&2
+  exit 1
+fi
+ZOOM_MEETING_ERROR=$(echo "${ZOOM_MEETING_JSON}" | jq -r '.error // empty')
+if [ -n "${ZOOM_MEETING_ERROR}" ]; then
+  echo "${ZOOM_MEETING_ERROR}" >&2
+  exit 1
+fi
+export ZOOM_MEETING_NUMBER=$(echo "${ZOOM_MEETING_JSON}" | jq -r '.meetingId')
+export ZOOM_MEETING_PASSWORD=$(echo "${ZOOM_MEETING_JSON}" | jq -r '.meetingPassword')
 
 DISPLAY_NUM="${ZOOM_BOT_DISPLAY_NUM:-99}"
 WIDTH="${ZOOM_BOT_WIDTH:-1280}"
