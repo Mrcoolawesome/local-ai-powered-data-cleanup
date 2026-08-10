@@ -1,6 +1,25 @@
 # Scraper sandbox, Node runtime. See Dockerfile.python's comment — same
-# "minimal base, setup_commands install what's actually needed" reasoning.
+# "minimal base, setup_commands install what's actually needed" reasoning,
+# EXCEPT for Chromium: bundled here rather than left to a scraper's own
+# `npm install` step, found the hard way running a real Puppeteer-based
+# scraper — `npm install` triggers Puppeteer's postinstall download of its
+# own Chrome build, which failed with "no zip archiver is available"
+# (this slim base has no `unzip`), and even with `unzip` added, downloading
+# a full Chrome build on every sandbox run is wasteful for something that
+# can just be a system package instead. scraper_sandbox.py sets
+# PUPPETEER_SKIP_DOWNLOAD + PUPPETEER_EXECUTABLE_PATH so Puppeteer uses
+# this system Chromium instead of trying to fetch its own.
+#
+# debian-based (not the node:22-slim's own bookworm base swapped for
+# something else) specifically because Ubuntu's `chromium` package is a
+# snap stub that doesn't run in a container — confirmed the hard way
+# already, twice, in spikes/zoom-presentation-bot and apps/zoom-bot-service.
+# node:22-slim IS already Debian bookworm, so no base-image change needed.
 FROM node:22-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    chromium \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN useradd --no-create-home --uid 10001 scraper
 USER scraper

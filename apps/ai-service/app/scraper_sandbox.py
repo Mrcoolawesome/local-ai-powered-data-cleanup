@@ -95,6 +95,19 @@ def run_scraper(
     # no path to influence.
     full_script = " && ".join([*setup_commands, run_command]) if setup_commands else run_command
 
+    environment = {"HOME": "/tmp"}
+    if runtime == "NODE":
+        # Found the hard way running a real Puppeteer-based scraper: its
+        # own `npm install` step triggers Puppeteer's postinstall download
+        # of a full Chrome build, which failed outright in this sandbox
+        # ("no zip archiver is available" — no `unzip`, and even with one,
+        # downloading a whole browser on every run is wasteful). Fixed by
+        # bundling a system Chromium in the Node sandbox image itself
+        # (Dockerfile.node) and pointing Puppeteer at it directly instead
+        # — skips the download entirely rather than just making it work.
+        environment["PUPPETEER_SKIP_DOWNLOAD"] = "true"
+        environment["PUPPETEER_EXECUTABLE_PATH"] = "/usr/bin/chromium"
+
     container = client.containers.run(
         image,
         command=["sh", "-c", full_script],
@@ -113,7 +126,7 @@ def run_scraper(
         # pip and npm both write cache files under $HOME by default and
         # fail outright without this. /tmp is writable regardless of uid
         # in both base images.
-        environment={"HOME": "/tmp"},
+        environment=environment,
         volumes={host_scraper_dir: {"bind": "/work", "mode": "rw"}},
         remove=False,
     )
