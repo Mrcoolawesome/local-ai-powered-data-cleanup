@@ -141,6 +141,11 @@ services:
       # read-write (session files, checkpoints, output), and that mount
       # source has to be a real host path.
       AI_SERVICE_HOST_SCRAPERS_PATH: ${HOST_SCRAPERS_PATH}
+      # Optional — name of an already-running VPN sidecar (e.g. Gluetun)
+      # whose network namespace scraper containers should join instead of
+      # the default bridge network (docs/03-ingestion-and-scrapers.md).
+      # Blank/unset leaves scrapers on the plain default network.
+      AI_SERVICE_SCRAPER_VPN_CONTAINER: ${SCRAPER_VPN_CONTAINER:-}
     volumes:
       - ./storage:/app/storage
       # Read-write here (unlike web's :ro mount above) — scraper runs
