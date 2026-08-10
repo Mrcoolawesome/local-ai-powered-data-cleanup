@@ -5,6 +5,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { planScraperCommand, executeScraper, writeScraperCredentials, AiServiceError } from "@/lib/ai-service";
 import { ingestScraperOutputFile } from "@/lib/scraper-ingest";
+import { deleteScraperDirectory } from "@/lib/scrapers-fs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -162,6 +163,28 @@ export default async function ScraperDetailPage({
 
     revalidatePath(`/scrapers/${id}`);
     redirect(`/scrapers/${id}`);
+  }
+
+  async function deleteScraper(formData: FormData) {
+    "use server";
+    const session = await auth();
+    if (!session?.user) redirect("/login");
+
+    const definition = await prisma.scraperDefinition.findFirst({ where: { id, userId: session.user.id } });
+    if (!definition) redirect("/scrapers");
+
+    const confirmed = formData.get("confirmDelete") === "on";
+    if (!confirmed) {
+      redirect(`/scrapers/${id}?error=${encodeURIComponent("Confirmation checkbox is required to delete a scraper.")}`);
+    }
+
+    // DB row first (cascades ScraperRun/Attachment, docs/02-data-model.md),
+    // then the files — if the file removal throws, the registration is
+    // already gone rather than left half-deleted in a confusing state.
+    await prisma.scraperDefinition.delete({ where: { id: definition.id } });
+    await deleteScraperDirectory(definition.scriptPath);
+
+    redirect("/scrapers");
   }
 
   return (
@@ -326,6 +349,32 @@ export default async function ScraperDetailPage({
           </Card>
         ))}
       </div>
+
+      <Separator />
+
+      <Card className="border-destructive/30">
+        <CardHeader>
+          <CardTitle>Danger zone</CardTitle>
+          <CardDescription>
+            Permanently deletes this registration, its run history, and any attachments — and removes the
+            scraper&apos;s files (including any saved credentials) from disk.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form action={deleteScraper} className="flex flex-col gap-3">
+            <div className="flex items-start gap-2">
+              <Checkbox id="confirmDelete" name="confirmDelete" required />
+              <Label htmlFor="confirmDelete" className="text-sm font-normal">
+                I understand this permanently deletes {def.platformName} ({def.scriptPath}), its run history, and
+                its files.
+              </Label>
+            </div>
+            <Button type="submit" variant="destructive" className="w-fit">
+              Delete scraper
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
     </main>
   );
 }

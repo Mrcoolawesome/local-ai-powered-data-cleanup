@@ -4,7 +4,7 @@ import path from "path";
 import { revalidatePath } from "next/cache";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { discoverScrapers, extractScraperZip, ScraperUploadError } from "@/lib/scrapers-fs";
+import { discoverScrapers, extractScraperZip, deleteScraperDirectory, ScraperUploadError } from "@/lib/scrapers-fs";
 import { AppNav } from "@/components/app-nav";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -78,6 +78,27 @@ export default async function ScrapersPage({
       redirect(`/scrapers?error=${encodeURIComponent(message)}`);
     }
 
+    revalidatePath("/scrapers");
+  }
+
+  async function deleteDiscovered(formData: FormData) {
+    "use server";
+    const session = await auth();
+    if (!session?.user) redirect("/login");
+
+    const dirRelativePath = formData.get("dirRelativePath") as string;
+    // Re-derive "not registered" server-side rather than trusting the
+    // client only rendered this button for an unregistered entry — a
+    // registered ScraperDefinition still needs its DB row (and any run
+    // history/attachments) removed first, via /scrapers/[id]'s own delete.
+    const isRegistered = await prisma.scraperDefinition.findFirst({
+      where: { userId: session.user.id, scriptPath: dirRelativePath },
+    });
+    if (isRegistered) {
+      redirect(`/scrapers?error=${encodeURIComponent("That scraper is registered — delete it from its own page instead.")}`);
+    }
+
+    await deleteScraperDirectory(dirRelativePath);
     revalidatePath("/scrapers");
   }
 
@@ -167,7 +188,7 @@ export default async function ScrapersPage({
               <CardTitle>{d.dirRelativePath}</CardTitle>
               <CardDescription>{d.readmeRelativePath}</CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="flex flex-wrap items-end gap-3">
               <form action={register} className="flex flex-wrap items-end gap-3">
                 <input type="hidden" name="dirRelativePath" value={d.dirRelativePath} />
                 <input type="hidden" name="readmeRelativePath" value={d.readmeRelativePath} />
@@ -187,6 +208,12 @@ export default async function ScrapersPage({
                   </select>
                 </div>
                 <Button type="submit">Register</Button>
+              </form>
+              <form action={deleteDiscovered}>
+                <input type="hidden" name="dirRelativePath" value={d.dirRelativePath} />
+                <Button type="submit" variant="destructive">
+                  Delete
+                </Button>
               </form>
             </CardContent>
           </Card>

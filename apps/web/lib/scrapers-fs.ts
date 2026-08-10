@@ -1,4 +1,4 @@
-import { mkdir, readdir, stat, writeFile } from "fs/promises";
+import { mkdir, readdir, rm, stat, writeFile } from "fs/promises";
 import path from "path";
 import AdmZip from "adm-zip";
 
@@ -122,4 +122,21 @@ export async function extractScraperZip(buffer: Buffer, suggestedName: string): 
   }
 
   return { dirName };
+}
+
+// Removes a scraper's whole directory from the scrapers root — the
+// counterpart to extractScraperZip/hand-copying one in. `dirRelativePath`
+// is expected to be exactly one path segment (a top-level directory name,
+// same shape discoverScrapers()/ScraperDefinition.scriptPath already use),
+// but validated the same zip-slip-style way as everything else in this
+// file rather than trusted, since it still ultimately drives an `rm -rf`.
+export async function deleteScraperDirectory(dirRelativePath: string): Promise<void> {
+  if (!dirRelativePath || dirRelativePath.includes("/") || dirRelativePath.includes("\\")) {
+    throw new ScraperUploadError(`Invalid scraper directory name: ${dirRelativePath}`);
+  }
+  const targetRoot = path.resolve(/* turbopackIgnore: true */ SCRAPERS_ROOT, dirRelativePath);
+  if (!isSafeRelativePath(/* turbopackIgnore: true */ SCRAPERS_ROOT, dirRelativePath) || targetRoot === path.resolve(/* turbopackIgnore: true */ SCRAPERS_ROOT)) {
+    throw new ScraperUploadError(`Refusing to delete unsafe path: ${dirRelativePath}`);
+  }
+  await rm(targetRoot, { recursive: true, force: true });
 }
