@@ -21,6 +21,11 @@ type TargetColumnForApi = {
 
 type CleaningRuleForApi = { rule: string; description: string };
 
+export type CleaningSummary = {
+  report: { unmapped_fields: string[]; flagged_gaps: { column: string; null_count: number; severity: string }[] };
+  measured: { input_row_count: number; output_row_count: number; output_columns: string[] };
+};
+
 export class AiServiceError extends Error {
   constructor(message: string, public detail?: unknown) {
     super(message);
@@ -47,6 +52,14 @@ export function inferSchema(inputRelativePath: string, originalFilename: string)
   });
 }
 
+type ExecuteResult = CleaningSummary & {
+  code: string;
+  base_url: string;
+  model: string;
+  cleaned_file_relative_path: string;
+  sandbox_logs: string;
+};
+
 export function executeCleaning(params: {
   sourceSchema: SourceColumn[];
   targetSchema: TargetColumnForApi[];
@@ -55,20 +68,60 @@ export function executeCleaning(params: {
   originalFilename: string;
   outputRelativeDir: string;
 }) {
-  return postJson<{
-    code: string;
-    base_url: string;
-    model: string;
-    cleaned_file_relative_path: string;
-    report: { unmapped_fields: string[]; flagged_gaps: { column: string; null_count: number; severity: string }[] };
-    measured: { input_row_count: number; output_row_count: number; output_columns: string[] };
-    sandbox_logs: string;
-  }>("/clean/execute", {
+  return postJson<ExecuteResult>("/clean/execute", {
     source_schema: params.sourceSchema,
     target_schema: params.targetSchema,
     cleaning_rules: params.cleaningRules,
     input_relative_path: params.inputRelativePath,
     original_filename: params.originalFilename,
     output_relative_dir: params.outputRelativeDir,
+  });
+}
+
+// --- Chat (Phase 4, docs/04-ai-cleaning-and-audit.md) ---------------------
+
+export const INTENT_EDIT = "edit_request";
+export const INTENT_AUDIT = "audit_request";
+export const INTENT_QUESTION = "question";
+
+export function classifyIntent(message: string) {
+  return postJson<{ intent: typeof INTENT_EDIT | typeof INTENT_AUDIT | typeof INTENT_QUESTION }>(
+    "/chat/classify-intent",
+    { message }
+  );
+}
+
+export function chatAudit(params: { datasetFileRelativePath: string; targetSchema: TargetColumnForApi[] }) {
+  return postJson<CleaningSummary>("/chat/audit", {
+    dataset_file_relative_path: params.datasetFileRelativePath,
+    target_schema: params.targetSchema,
+  });
+}
+
+export function chatEdit(params: {
+  message: string;
+  targetSchema: TargetColumnForApi[];
+  cleaningRules: CleaningRuleForApi[];
+  datasetFileRelativePath: string;
+  outputRelativeDir: string;
+}) {
+  return postJson<ExecuteResult>("/chat/edit", {
+    message: params.message,
+    target_schema: params.targetSchema,
+    cleaning_rules: params.cleaningRules,
+    dataset_file_relative_path: params.datasetFileRelativePath,
+    output_relative_dir: params.outputRelativeDir,
+  });
+}
+
+export function chatQuestion(params: {
+  message: string;
+  targetSchema: TargetColumnForApi[];
+  datasetFileRelativePath: string;
+}) {
+  return postJson<{ reply: string }>("/chat/question", {
+    message: params.message,
+    target_schema: params.targetSchema,
+    dataset_file_relative_path: params.datasetFileRelativePath,
   });
 }

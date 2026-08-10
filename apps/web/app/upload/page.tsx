@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { saveUploadedFile } from "@/lib/storage";
 import { inferSchema, executeCleaning, AiServiceError } from "@/lib/ai-service";
 import { renderAuditReportMarkdown } from "@/lib/audit-report";
+import { findOrCreateChatSession } from "@/lib/chat";
 import { ColumnSchema, type Column } from "@/lib/target-schema";
 import { AppNav } from "@/components/app-nav";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -136,6 +137,8 @@ export default async function UploadPage() {
         measured: result.measured,
       });
 
+      const chatSession = await findOrCreateChatSession(userId, dataset.id);
+
       await prisma.$transaction([
         prisma.cleaningRun.update({
           where: { id: run.id },
@@ -157,6 +160,18 @@ export default async function UploadPage() {
           },
         }),
         prisma.uploadedFile.update({ where: { id: uploadedFile.id }, data: { status: "CLEANED" } }),
+        // Renders as the first message per docs/04-ai-cleaning-and-audit.md
+        // — "replies in the chat interface with an HTML/Markdown audit
+        // report" — the same session is reused on every re-clean, not a
+        // fresh one each time.
+        prisma.chatMessage.create({
+          data: {
+            chatSessionId: chatSession.id,
+            role: "ASSISTANT",
+            content: contentMarkdown,
+            messageType: "AUDIT_REPORT",
+          },
+        }),
       ]);
     } catch (err) {
       const message = err instanceof AiServiceError ? JSON.stringify(err.detail) : String(err);
@@ -266,12 +281,20 @@ export default async function UploadPage() {
                           </Button>
                         </form>
                         {latestRun?.auditReport && (
-                          <a
-                            href={`/datasets/${f.dataset!.id}`}
-                            className={buttonVariants({ variant: "ghost", size: "sm" })}
-                          >
-                            View report
-                          </a>
+                          <>
+                            <a
+                              href={`/datasets/${f.dataset!.id}`}
+                              className={buttonVariants({ variant: "ghost", size: "sm" })}
+                            >
+                              View report
+                            </a>
+                            <a
+                              href={`/datasets/${f.dataset!.id}/chat`}
+                              className={buttonVariants({ variant: "ghost", size: "sm" })}
+                            >
+                              Chat
+                            </a>
+                          </>
                         )}
                       </TableCell>
                     </TableRow>

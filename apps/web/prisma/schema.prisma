@@ -23,6 +23,7 @@ model User {
   targetSchemas TargetSchema[]
   uploadedFiles UploadedFile[]
   datasets      Dataset[]
+  chatSessions  ChatSession[]
 }
 
 // Singleton row (fixed id) rather than per-user: the Ollama endpoint is one
@@ -130,6 +131,7 @@ model Dataset {
 
   uploadedFiles UploadedFile[]
   cleaningRuns  CleaningRun[]
+  chatSessions  ChatSession[]
 }
 
 enum CleaningRunStatus {
@@ -167,4 +169,40 @@ model AuditReport {
   summary         Json
   contentMarkdown String      @db.Text
   createdAt       DateTime    @default(now())
+}
+
+// One conversation per Dataset (docs/02-data-model.md) — find-or-create,
+// not one-per-message-thread: re-cleans and on-demand audits append to the
+// same session rather than starting a new one each time (docs/04's
+// "appended to the existing ChatSession rather than starting a new one").
+model ChatSession {
+  id        String   @id @default(cuid())
+  datasetId String
+  dataset   Dataset  @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  messages ChatMessage[]
+}
+
+enum ChatMessageRole {
+  USER
+  ASSISTANT
+}
+
+enum ChatMessageType {
+  TEXT
+  AUDIT_REPORT
+  ACTION_CONFIRMATION
+}
+
+model ChatMessage {
+  id            String          @id @default(cuid())
+  chatSessionId String
+  chatSession   ChatSession     @relation(fields: [chatSessionId], references: [id], onDelete: Cascade)
+  role          ChatMessageRole
+  content       String          @db.Text
+  messageType   ChatMessageType @default(TEXT)
+  createdAt     DateTime        @default(now())
 }

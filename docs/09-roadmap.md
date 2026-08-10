@@ -45,10 +45,13 @@ Phased so each phase produces something runnable/demoable, and so the highest-ri
 
 ## Phase 4 — Human-in-the-Loop Chat
 
-- Chat UI (`ChatSession`/`ChatMessage`), rendering the initial audit report as the first message.
-- Intent-classification step (edit vs. audit vs. question) per [04-ai-cleaning-and-audit.md](./04-ai-cleaning-and-audit.md).
-- LangChain/PandasAI agent wired for iterative edits, routed through the same sandbox as Phase 3 — no separate "trusted" code path.
-- On-demand full-audit trigger.
+**Status: done, verified live** — a script exercising the exact `sendMessage` Server Action logic ran three real chat turns (question, edit, audit) against the live stack, each correctly classified and routed, with the edit verified by reading the actual output file (`ALICE NGUYEN` really was uppercased) and the audit correctly re-flagging gaps against a deliberately mismatched schema.
+
+- [x] Chat UI (`ChatSession`/`ChatMessage`), rendering the initial audit report as the first message — one session per `Dataset` (find-or-create), so re-cleans and on-demand audits append to the same conversation rather than starting fresh each time.
+- [x] Intent-classification step (edit vs. audit vs. question) per [04-ai-cleaning-and-audit.md](./04-ai-cleaning-and-audit.md) — a small, separate, temperature-0 call. Correctly classified all three real test messages on the first try, including the spec's own example phrasing ("Audit the Contacts sheet").
+- [x] Edit path wired for iterative edits, routed through the identical sandbox as Phase 3's initial clean — no separate "trusted" code path, per docs/04. Verified with a real request ("Make every full_name value uppercase") that changed only what was asked and nothing else.
+- [x] On-demand full-audit trigger — recomputes the report directly from `TargetSchema` against the dataset's current file, no LLM call and no sandbox execution needed, since the report is a deterministic function of (current data, schema). **Real design decision:** the report-scoring logic (`compute_report`) now lives in exactly one place (`apps/ai-service/app/report.py`) and is embedded into the sandbox harness via `inspect.getsource()` rather than duplicated — the subtle required-field-scoring bug found in Phase 3 lived in this exact logic once already, so keeping two copies in sync by hand was a real, known risk, not a hypothetical one.
+- [x] Question-answering path, answering only from aggregate stats (row/null counts, low-cardinality value counts) — never raw rows, per [05-llm-prompting.md](./05-llm-prompting.md). Verified: asked "how many rows are missing an email" against a 3-row test set, got the correct answer (1) derived purely from aggregates.
 
 ## Phase 5 — Scraper Agent
 
