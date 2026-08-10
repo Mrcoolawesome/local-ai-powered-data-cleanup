@@ -30,6 +30,15 @@ class Config(BaseSettings):
     scrapers_root: str = "/app/scrapers"
     host_scrapers_path: str | None = None
 
+    # Optional: name/id of an already-running VPN container (e.g. a
+    # Gluetun sidecar) whose network namespace scraper containers should
+    # join instead of the default bridge network — moves a scraper's
+    # traffic onto that container's IP without this app touching or
+    # depending on how that VPN container itself is configured. None
+    # (the default) leaves scrapers on the plain default network, exactly
+    # as before this setting existed.
+    scraper_vpn_container: str | None = None
+
     class Config:
         env_prefix = "AI_SERVICE_"
 

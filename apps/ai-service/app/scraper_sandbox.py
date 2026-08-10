@@ -132,8 +132,7 @@ def start_scraper(
         environment["PUPPETEER_SKIP_DOWNLOAD"] = "true"
         environment["PUPPETEER_EXECUTABLE_PATH"] = "/usr/bin/chromium"
 
-    container = client.containers.run(
-        image,
+    run_kwargs = dict(
         command=["sh", "-c", full_script],
         detach=True,
         # Keeps stdin open (and unbuffered, non-tty) for the run's whole
@@ -161,6 +160,15 @@ def start_scraper(
         volumes={host_scraper_dir: {"bind": "/work", "mode": "rw"}},
         remove=False,
     )
+    if config.scraper_vpn_container:
+        # Joins that container's existing network namespace instead of the
+        # default bridge — the scraper's outbound traffic rides whatever
+        # tunnel/IP that container already has set up. Nothing about the
+        # VPN container itself is touched or depended on beyond its name;
+        # this app has no opinion on how it's configured.
+        run_kwargs["network_mode"] = f"container:{config.scraper_vpn_container}"
+
+    container = client.containers.run(image, **run_kwargs)
     return {"container_id": container.id}
 
 
