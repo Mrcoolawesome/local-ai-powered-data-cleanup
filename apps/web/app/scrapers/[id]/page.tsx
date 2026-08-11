@@ -11,6 +11,7 @@ import {
   cancelScraperRun,
   writeScraperCredentials,
   AiServiceError,
+  type ScraperPlan,
 } from "@/lib/ai-service";
 import { ingestScraperOutputFile } from "@/lib/scraper-ingest";
 import { deleteScraperDirectory } from "@/lib/scrapers-fs";
@@ -34,13 +35,13 @@ export default async function ScraperDetailPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ plan?: string; error?: string }>;
+  searchParams: Promise<{ error?: string }>;
 }) {
   const session = await auth();
   if (!session?.user) redirect("/login");
 
   const { id } = await params;
-  const { plan: showPlan, error } = await searchParams;
+  const { error } = await searchParams;
 
   const def = await prisma.scraperDefinition.findFirst({
     where: { id, userId: session.user.id },
@@ -59,18 +60,33 @@ export default async function ScraperDetailPage({
     revalidatePath(`/scrapers/${id}`);
   }
 
-  // Runs a fresh planning call every time the plan section is shown rather
-  // than caching it — a stale plan against a scraper whose README drifted
-  // is exactly the silent-failure mode docs/03 warns about.
-  let plan: Awaited<ReturnType<typeof planScraperCommand>>["plan"] | null = null;
-  let planError: string | null = null;
-  if (showPlan) {
+  // Read from the cache (populated at registration time, or by a previous
+  // refreshPlan below) rather than calling the LLM on every page load —
+  // registration already made this scraper immediately runnable. Still
+  // fully re-generatable via refreshPlan, not a permanent snapshot — a
+  // README can drift out of sync with the actual platform (docs/03).
+  const plan = def.cachedPlan as ScraperPlan | null;
+
+  async function refreshPlan() {
+    "use server";
+    const session = await auth();
+    if (!session?.user) redirect("/login");
+    const definition = await prisma.scraperDefinition.findFirst({ where: { id, userId: session.user.id } });
+    if (!definition) redirect("/scrapers");
+
     try {
-      const result = await planScraperCommand(def.readmePath, def.runtime);
-      plan = result.plan;
+      const result = await planScraperCommand(definition.readmePath, definition.runtime);
+      await prisma.scraperDefinition.update({
+        where: { id: definition.id },
+        data: { cachedPlan: result.plan, planCachedAt: new Date() },
+      });
     } catch (e) {
-      planError = e instanceof AiServiceError ? e.message : "Planning failed.";
+      const message = e instanceof AiServiceError ? e.message : "Planning failed.";
+      redirect(`/scrapers/${id}?error=${encodeURIComponent(message)}`);
     }
+
+    revalidatePath(`/scrapers/${id}`);
+    redirect(`/scrapers/${id}`);
   }
 
   async function runScraper(formData: FormData) {
@@ -418,16 +434,20 @@ export default async function ScraperDetailPage({
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
-          {!showPlan && (
-            <Link href={`/scrapers/${id}?plan=1`}>
-              <Button type="button" variant="outline">
-                Get plan from README
+          <div className="flex items-center gap-3">
+            <form action={refreshPlan}>
+              <Button type="submit" variant="outline">
+                {plan ? "Refresh plan from README" : "Get plan from README"}
               </Button>
-            </Link>
-          )}
+            </form>
+            {def.planCachedAt && (
+              <span className="text-muted-foreground text-xs">
+                Cached {def.planCachedAt.toLocaleString()}
+              </span>
+            )}
+          </div>
 
           {error && <p className="text-destructive text-sm">{decodeURIComponent(error)}</p>}
-          {planError && <p className="text-destructive text-sm">{planError}</p>}
 
           {plan && (
             <>

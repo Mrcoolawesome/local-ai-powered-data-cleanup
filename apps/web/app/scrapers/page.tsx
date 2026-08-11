@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { discoverScrapers, extractScraperZip, deleteScraperDirectory, ScraperUploadError } from "@/lib/scrapers-fs";
+import { planScraperCommand } from "@/lib/ai-service";
 import { AppNav } from "@/components/app-nav";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -45,7 +46,7 @@ export default async function ScrapersPage({
     const runtime = formData.get("runtime") as string;
     if (runtime !== "PYTHON" && runtime !== "NODE") throw new Error(`Unknown runtime: ${runtime}`);
 
-    await prisma.scraperDefinition.create({
+    const definition = await prisma.scraperDefinition.create({
       data: {
         userId: session.user.id,
         platformName,
@@ -54,6 +55,23 @@ export default async function ScrapersPage({
         runtime,
       },
     });
+
+    // Plans and caches immediately so the scraper is actually ready to run
+    // the moment it's registered, not just a row pointing at some files —
+    // the whole point of registration is "process this into something
+    // runnable." Best-effort: a scraper still registers successfully even
+    // if this fails (e.g. Ollama briefly down) — the detail page's own
+    // "Get plan from README" covers that case manually.
+    try {
+      const { plan } = await planScraperCommand(readmeRelativePath, runtime);
+      await prisma.scraperDefinition.update({
+        where: { id: definition.id },
+        data: { cachedPlan: plan, planCachedAt: new Date() },
+      });
+    } catch {
+      // Swallowed on purpose — see comment above.
+    }
+
     revalidatePath("/scrapers");
   }
 
