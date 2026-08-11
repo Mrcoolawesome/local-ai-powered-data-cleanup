@@ -554,6 +554,7 @@ async def scraper_status(req: ScraperStatusRequest):
         result = await run_in_threadpool(
             poll_scraper,
             req.container_id,
+            req.scraper_dir_relative_path,
             req.watch_signals,
             req.timeout_seconds,
             req.started_at,
@@ -591,6 +592,7 @@ async def scraper_input(req: ScraperInputRequest):
 
 class ScraperCancelRequest(BaseModel):
     container_id: str
+    scraper_dir_relative_path: str
 
 
 @app.post("/scraper/cancel")
@@ -601,5 +603,5 @@ async def scraper_cancel(req: ScraperCancelRequest):
     no-op), so this is safe to call even if the run finished on its own
     a moment before the human clicked cancel.
     """
-    result = await run_in_threadpool(cancel_scraper, req.container_id)
+    result = await run_in_threadpool(cancel_scraper, req.container_id, req.scraper_dir_relative_path)
     return result

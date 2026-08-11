@@ -325,13 +325,17 @@ export default async function ScraperDetailPage({
 
     const run = await prisma.scraperRun.findFirst({
       where: { id: runId, scraperDefinition: { userId: session.user.id } },
+      include: { scraperDefinition: true },
     });
     if (!run || (run.status !== "RUNNING" && run.status !== "AWAITING_INPUT")) return;
 
     let logOutput = run.logOutput;
     if (run.containerId) {
       try {
-        const result = await cancelScraperRun({ containerId: run.containerId });
+        const result = await cancelScraperRun({
+          containerId: run.containerId,
+          scraperDirRelativePath: run.scraperDefinition.scriptPath,
+        });
         if (result.logs) logOutput = result.logs;
       } catch {
         // Best-effort — still mark it cancelled even if ai-service couldn't

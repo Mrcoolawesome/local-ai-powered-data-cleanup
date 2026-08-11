@@ -240,6 +240,9 @@ export function submitScraperInput(params: { containerId: string; text: string }
 // — e.g. one paused on a 2FA code that's never arriving. Idempotent on
 // the ai-service side, so safe to call even if the run already finished
 // on its own moments before the human clicked cancel.
-export function cancelScraperRun(params: { containerId: string }) {
-  return postJson<{ logs: string }>("/scraper/cancel", { container_id: params.containerId });
+export function cancelScraperRun(params: { containerId: string; scraperDirRelativePath: string }) {
+  return postJson<{ logs: string }>("/scraper/cancel", {
+    container_id: params.containerId,
+    scraper_dir_relative_path: params.scraperDirRelativePath,
+  });
 }

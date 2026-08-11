@@ -172,8 +172,34 @@ def start_scraper(
     return {"container_id": container.id}
 
 
+def _cleanup_stale_browser_locks(scraper_dir_relative_path: str) -> None:
+    """A container that gets force-killed (timeout, or a human clicking
+    Cancel — either path below) never gives a Chromium process inside it a
+    chance to release its profile's SingletonLock/SingletonSocket/
+    SingletonCookie files. Found for real: the NEXT run then refuses to
+    launch Chromium at all — "the profile appears to be in use by another
+    Chromium process on another computer <old container's short hostname>"
+    — because every sandbox container gets a fresh hostname, so Chromium
+    can't verify the process the stale lock references is actually dead
+    (it would only trust that check within the SAME hostname). Safe to
+    remove unconditionally: these three names are always safe-to-regenerate
+    Chromium runtime state, never scraped data, and by construction nothing
+    in a just-killed container can still be holding them.
+    """
+    local_scraper_dir = os.path.join(config.scrapers_root, scraper_dir_relative_path)
+    lock_names = {"SingletonLock", "SingletonSocket", "SingletonCookie"}
+    for root, _dirs, files in os.walk(local_scraper_dir):
+        for name in files:
+            if name in lock_names:
+                try:
+                    os.remove(os.path.join(root, name))
+                except OSError:
+                    pass
+
+
 def poll_scraper(
     container_id: str,
+    scraper_dir_relative_path: str,
     watch_signals: list[str],
     timeout_seconds: int,
     started_at: float,
@@ -209,6 +235,7 @@ def poll_scraper(
             logs = container.logs().decode(errors="replace")
             exit_code = container.attrs.get("State", {}).get("ExitCode", -1)
             container.remove(force=True)
+            _cleanup_stale_browser_locks(scraper_dir_relative_path)
             return {
                 "state": "exited",
                 "exit_code": exit_code,
@@ -250,7 +277,7 @@ def send_scraper_input(container_id: str, text: str) -> None:
         sock.close()
 
 
-def cancel_scraper(container_id: str) -> dict:
+def cancel_scraper(container_id: str, scraper_dir_relative_path: str) -> dict:
     """Kills and removes a still-running (RUNNING or, just as often in
     practice, AWAITING_INPUT — e.g. paused on a 2FA code that's simply
     never coming) container on request. Returns whatever it had logged up
@@ -270,6 +297,7 @@ def cancel_scraper(container_id: str) -> dict:
     container.reload()
     logs = container.logs().decode(errors="replace")
     container.remove(force=True)
+    _cleanup_stale_browser_locks(scraper_dir_relative_path)
     return {"logs": logs}
 
 
