@@ -17,8 +17,16 @@
 # node:22-slim IS already Debian bookworm, so no base-image change needed.
 FROM node:22-slim
 
+# xvfb here too, for the same reason as Dockerfile.python's own comment —
+# a Node scraper hardcoding a headed Puppeteer/Playwright launch hits the
+# identical "no X server" failure; scraper_sandbox.py wraps every run with
+# `xvfb-run -a` unconditionally, harmless for scripts that never need it.
+# xauth is required too — xvfb-run fails immediately without it ("xauth
+# command not found"), confirmed the hard way in Dockerfile.python.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     chromium \
+    xvfb \
+    xauth \
     && rm -rf /var/lib/apt/lists/*
 
 # Found for real, running an actual scraper: some scripts hardcode Puppeteer's

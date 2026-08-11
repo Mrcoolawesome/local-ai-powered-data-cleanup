@@ -4,14 +4,41 @@
 # README would actually do, rather than this image trying to pre-bake
 # every possible scraper's dependencies.
 #
-# Known limitation: a Playwright-based scraper's `playwright install
-# chromium` step needs system libraries this slim base doesn't have
-# (fonts, X11 libs, etc.) — a real Playwright scraper run will likely need
-# this Dockerfile extended, or switched to Playwright's own official base
-# image, before it works. Not solved here since this spike/build phase
-# intentionally never runs the real Playwright-based HCP scraper against
-# live credentials — see docs/09-roadmap.md Phase 5's testing notes.
+# The exact predicted gap below happened for real running the actual
+# housecallpro-job-attachments-scraper-v2: pip-installing playwright and
+# downloading its own Chrome-for-Testing build both succeeded, but
+# launching it failed — "error while loading shared libraries:
+# libglib-2.0.so.0: cannot open shared object file" — this slim base has
+# none of the system shared libraries any Chromium-family binary needs at
+# runtime, regardless of which one (Playwright's own downloaded build, in
+# this case) actually ends up running. Same fix as Dockerfile.node's
+# Puppeteer issue, and the same reasoning for why: installing Debian's own
+# `chromium` package (NOT Ubuntu's — its `chromium` is a snap stub that
+# doesn't run in a container, confirmed the hard way already in
+# spikes/zoom-presentation-bot and apps/zoom-bot-service) pulls in the
+# full transitive shared-library dependency chain any Chromium build
+# needs via apt's own dependency resolution, without having to hand-curate
+# and maintain that list ourselves. python:3.11-slim is already Debian
+# bookworm, so no base-image change needed, same as node:22-slim wasn't.
 FROM python:3.11-slim
+
+# xvfb (specifically its xvfb-run wrapper) is also here, not just chromium
+# — confirmed for real running the same scraper: its own script hardcodes
+# `p.chromium.launch(headless=False)`, and Playwright's own error message
+# for that inside a container with no real display names the exact fix:
+# "Set either 'headless: true' or use 'xvfb-run <your-playwright-app>'".
+# scraper_sandbox.py wraps every run's command with `xvfb-run -a`
+# unconditionally (not just when a script is known to need it) — a no-op
+# for a script that never opens a real window, so there's no reason to
+# special-case which scrapers get it. xauth is required too — xvfb-run
+# shells out to it to set up X authority cookies and fails immediately
+# ("xauth command not found") without it; confirmed the hard way, `xvfb`
+# alone isn't sufficient.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    chromium \
+    xvfb \
+    xauth \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN useradd --no-create-home --uid 10001 scraper
 USER scraper

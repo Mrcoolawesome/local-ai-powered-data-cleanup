@@ -133,8 +133,29 @@ def start_scraper(
         environment["PUPPETEER_EXECUTABLE_PATH"] = "/usr/bin/chromium"
 
     run_kwargs = dict(
-        command=["sh", "-c", full_script],
+        # Wrapped in a virtual X server unconditionally, not just for
+        # scripts known to need one — found for real running a Playwright
+        # scraper that hardcodes a headed (non-headless) browser launch,
+        # which fails outright in a container with no real display.
+        # xvfb-run is a no-op in every way that matters for a script that
+        # never opens a window (headless scripts, or ones with no browser
+        # at all), so there's no reason to special-case which scrapers get
+        # it (Dockerfile.python/Dockerfile.node both install `xvfb`).
+        command=["xvfb-run", "-a", "sh", "-c", full_script],
         detach=True,
+        # Required for xvfb-run specifically, found the hard way: without a
+        # real init process, the sandboxed command runs as PID 1, which the
+        # kernel gives special (and here, breaking) signal-handling
+        # semantics — xvfb-run's own readiness handshake with Xvfb waits on
+        # a SIGUSR1 that a PID-1 shell never correctly receives/forwards,
+        # so it hung forever with Xvfb started but the wrapped command
+        # never actually launched (confirmed via `docker exec ... ps aux`
+        # showing only xvfb-run + Xvfb, nothing else, no matter how long
+        # given). `init=True` runs Docker's bundled tini as real PID 1,
+        # which reaps/forwards signals correctly — same fix, same reason,
+        # as any "why does my container hang with a wrapper script as
+        # PID 1" issue.
+        init=True,
         # Keeps stdin open (and unbuffered, non-tty) for the run's whole
         # life so send_scraper_input can write to it later, in a
         # completely separate request — without this a scraper blocked on
